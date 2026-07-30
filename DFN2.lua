@@ -1,7 +1,7 @@
 -- ============================================================
---  DFN脚本 - 完整版（WindUI）
---  刷物品：名称匹配刷（Gold Bar / Coal / Bond）
---  功能：自瞄 · 透视 · 夜视 · 子弹追踪 · 飞行 · 自动攻击 · 自动喝药
+--  DFN脚本 - 完整最终版
+--  功能：自瞄 · 透视 · 夜视 · 子弹追踪 · 飞行 · 自动攻击 · 自动喝蛇油
+--  刷物品：随机刷(0~5000) + 名称匹配刷(0~10000, 匹配英文名, 调用两次)
 -- ============================================================
 
 local RunService = game:GetService("RunService")
@@ -26,22 +26,6 @@ local WindUI = loadstring(game:HttpGet("https://raw.githubusercontent.com/Footag
 local storeEvent = ReplicatedStorage.Shared.Universe.Network.RemoteEvent.Store
 local swingEvent = ReplicatedStorage.Shared.Universe.Network.RemoteEvent.SwingMelee
 local useEvent = ReplicatedStorage.Shared.Universe.Network.RemoteEvent.Use
-
--- ============================================================
---  中文映射
--- ============================================================
-local NameTranslate = {
-    ["Zombie"] = "僵尸",
-    ["Skeleton"] = "骷髅",
-    ["Bandit"] = "强盗",
-    ["Guard"] = "守卫",
-    ["Boss"] = "BOSS",
-    ["NewspaperBoy"] = "报童",
-}
-local function GetDisplayName(model)
-    local eng = model.Name
-    return NameTranslate[eng] or eng
-end
 
 -- ============================================================
 --  设置
@@ -74,6 +58,22 @@ local Settings = {
 local touchCount = 0
 local lastHealTime = 0
 local healCooldown = 2
+
+-- ============================================================
+--  中文映射
+-- ============================================================
+local NameTranslate = {
+    ["Zombie"] = "僵尸",
+    ["Skeleton"] = "骷髅",
+    ["Bandit"] = "强盗",
+    ["Guard"] = "守卫",
+    ["Boss"] = "BOSS",
+    ["NewspaperBoy"] = "报童",
+}
+local function GetDisplayName(model)
+    local eng = model.Name
+    return NameTranslate[eng] or eng
+end
 
 -- ============================================================
 --  武器配置
@@ -472,6 +472,79 @@ RunService.RenderStepped:Connect(function()
 end)
 
 -- ============================================================
+--  刷物品功能
+-- ============================================================
+
+-- 建立 ID→名称 映射（0~10000）
+local function GetIdToNameMap()
+    local map = {}
+    for _, obj in ipairs(ReplicatedStorage:GetDescendants()) do
+        if obj:IsA("NumberValue") or obj:IsA("IntValue") or obj:IsA("StringValue") then
+            local name = obj.Name
+            local val = obj.Value
+            local id = type(val) == "number" and val or tonumber(val)
+            if id and id >= 0 and id <= 10000 then
+                map[id] = name
+            end
+        end
+    end
+    return map
+end
+
+-- 模式1：随机刷（0~5000，全刷）
+local function SpawnRandom()
+    if not storeEvent then
+        WindUI:Notify({ Title = "❌ Store事件不存在", Duration = 3 })
+        return
+    end
+    for id = 0, 5000 do
+        pcall(function()
+            storeEvent:FireServer(id)
+            storeEvent:FireServer(id)  -- 调用两次
+        end)
+        task.wait(0.01)
+    end
+    WindUI:Notify({ Title = "✅ 随机刷完成", Content = "已刷 0~5000", Duration = 3 })
+end
+
+-- 模式2：名称匹配刷（0~10000，匹配英文名，调用两次）
+local targetNames = {"Gold Bar", "Coal", "Bond"}  -- 在这里添加要刷的物品英文名
+
+local function SpawnByName()
+    if not storeEvent then
+        WindUI:Notify({ Title = "❌ Store事件不存在", Duration = 3 })
+        return
+    end
+
+    local idToName = GetIdToNameMap()
+    local found = {}
+    local count = 0
+
+    for id = 0, 10000 do
+        local name = idToName[id]
+        if name then
+            for _, target in ipairs(targetNames) do
+                if name:find(target) then
+                    pcall(function()
+                        storeEvent:FireServer(id)
+                        storeEvent:FireServer(id)  -- 调用两次
+                    end)
+                    count = count + 1
+                    break
+                end
+            end
+        end
+        task.wait(0.01)
+    end
+
+    WindUI:Notify({
+        Title = "✅ 名称匹配刷完成",
+        Content = "共刷 " .. count .. " 件",
+        Duration = 4,
+    })
+end
+
+-- ============================================================
 --  飞行功能
 -- ============================================================
 local flyEnabled = false
@@ -561,43 +634,40 @@ local function ToggleAttack()
 end
 
 -- ============================================================
---  自动喝药
+--  自动喝蛇油
 -- ============================================================
 local healRunning = false
 
 local function ToggleHeal()
     healRunning = not healRunning
     if healRunning then
-        WindUI:Notify({ Title = "✅ 自动喝药已开启", Content = "阈值: " .. Settings.healThreshold .. "%", Duration = 3 })
+        WindUI:Notify({
+            Title = "✅ 自动喝蛇油已开启",
+            Content = "阈值: " .. Settings.healThreshold .. "%",
+            Duration = 3,
+        })
     else
-        WindUI:Notify({ Title = "✅ 自动喝药已关闭", Duration = 2 })
+        WindUI:Notify({ Title = "✅ 自动喝蛇油已关闭", Duration = 2 })
     end
 end
 
 RunService.Heartbeat:Connect(function()
     if not healRunning then return end
     if not useEvent then return end
+
     local char = LocalPlayer.Character
     if not char then return end
     local hum = char:FindFirstChildOfClass("Humanoid")
     if not hum then return end
+
     local hp = hum.Health
     local maxHp = hum.MaxHealth
     if maxHp <= 0 then return end
+
     if (hp / maxHp) * 100 < Settings.healThreshold and hp > 0 then
         local now = os.clock()
         if now - lastHealTime >= healCooldown then
-            local idToName = {}
-            for _, obj in ipairs(ReplicatedStorage:GetDescendants()) do
-                if obj:IsA("NumberValue") or obj:IsA("IntValue") or obj:IsA("StringValue") then
-                    local name = obj.Name
-                    local val = obj.Value
-                    local id = type(val) == "number" and val or tonumber(val)
-                    if id and id >= 0 and id <= 10000 then
-                        idToName[id] = name
-                    end
-                end
-            end
+            local idToName = GetIdToNameMap()
             local snakeId = nil
             for id, name in pairs(idToName) do
                 if name:find("Snake Oil") or name:find("蛇油") then
@@ -822,70 +892,24 @@ WeaponTab:Slider({
 -- ============================================================
 local ItemTab = Window:Tab({ Title = "物品", Icon = "solar:box-bold" })
 
--- ===== 名称匹配刷（核心功能） =====
+ItemTab:Button({
+    Title = "🎲 随机刷（0~5000）",
+    Callback = function()
+        SpawnRandom()
+    end,
+})
+
 ItemTab:Button({
     Title = "🎯 名称匹配刷",
     Callback = function()
-        if not storeEvent then
-            WindUI:Notify({ Title = "❌ Store事件不存在", Duration = 3 })
-            return
-        end
-
-        local targetNames = {"Gold Bar", "Coal", "Bond"}
-
-        -- 建立 ID→名称 映射
-        local idToName = {}
-        for _, obj in ipairs(ReplicatedStorage:GetDescendants()) do
-            if obj:IsA("NumberValue") or obj:IsA("IntValue") or obj:IsA("StringValue") then
-                local name = obj.Name
-                local val = obj.Value
-                local id = type(val) == "number" and val or tonumber(val)
-                if id and id >= 0 and id <= 10000 then
-                    idToName[id] = name
-                end
-            end
-        end
-
-        local count = 0
-        for id = 0, 10000 do
-            local name = idToName[id]
-            if name then
-                for _, target in ipairs(targetNames) do
-                    if name:find(target) then
-                        pcall(function()
-                            storeEvent:FireServer(id)
-                            storeEvent:FireServer(id)
-                        end)
-                        count = count + 1
-                        break
-                    end
-                end
-            end
-            task.wait(0.01)
-        end
-
-        WindUI:Notify({
-            Title = "✅ 刷取完成",
-            Content = "共刷 " .. count .. " 件",
-            Duration = 4,
-        })
+        SpawnByName()
     end,
 })
 
 ItemTab:Button({
     Title = "🔍 扫描物品",
     Callback = function()
-        local idToName = {}
-        for _, obj in ipairs(ReplicatedStorage:GetDescendants()) do
-            if obj:IsA("NumberValue") or obj:IsA("IntValue") or obj:IsA("StringValue") then
-                local name = obj.Name
-                local val = obj.Value
-                local id = type(val) == "number" and val or tonumber(val)
-                if id and id >= 0 and id <= 10000 then
-                    idToName[id] = name
-                end
-            end
-        end
+        local idToName = GetIdToNameMap()
         local count = 0
         for id, name in pairs(idToName) do
             count = count + 1
@@ -909,7 +933,7 @@ SettingsTab:Toggle({
 })
 
 SettingsTab:Toggle({
-    Title = "自动喝药",
+    Title = "自动喝蛇油",
     Value = false,
     Callback = function(v)
         ToggleHeal()
@@ -917,13 +941,17 @@ SettingsTab:Toggle({
 })
 
 SettingsTab:Slider({
-    Title = "喝药阈值 (%)",
+    Title = "喝蛇油阈值 (%)",
     Step = 1,
     Value = { Min = 10, Max = 90, Default = 50 },
     Callback = function(v)
         Settings.healThreshold = v
         if healRunning then
-            WindUI:Notify({ Title = "✅ 阈值已更新", Content = "血量低于 " .. v .. "% 自动喝药", Duration = 3 })
+            WindUI:Notify({
+                Title = "✅ 阈值已更新",
+                Content = "血量低于 " .. v .. "% 自动喝蛇油",
+                Duration = 3,
+            })
         end
     end,
 })
