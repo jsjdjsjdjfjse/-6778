@@ -1,7 +1,7 @@
 -- ============================================================
---  DFN脚本 - 完整最终版
+--  DFN脚本 - 新版本（刷物品速度可选）
 --  功能：自瞄 · 透视 · 夜视 · 子弹追踪 · 飞行 · 自动攻击 · 自动喝蛇油
---  刷物品：随机刷(0~5000) + 名称匹配刷(0~10000, 匹配英文名, 调用两次)
+--  物品刷：随机刷(0~5000) + 名称匹配刷(中文界面，英文匹配，速度可选，带停止)
 -- ============================================================
 
 local RunService = game:GetService("RunService")
@@ -23,9 +23,27 @@ local WindUI = loadstring(game:HttpGet("https://raw.githubusercontent.com/Footag
 -- ============================================================
 --  获取网络事件
 -- ============================================================
-local storeEvent = ReplicatedStorage.Shared.Universe.Network.RemoteEvent.Store
-local swingEvent = ReplicatedStorage.Shared.Universe.Network.RemoteEvent.SwingMelee
-local useEvent = ReplicatedStorage.Shared.Universe.Network.RemoteEvent.Use
+local storeEvent, swingEvent, useEvent
+pcall(function()
+    local r = ReplicatedStorage
+    if r then
+        local sh = r:FindFirstChild("Shared")
+        if sh then
+            local u = sh:FindFirstChild("Universe")
+            if u then
+                local n = u:FindFirstChild("Network")
+                if n then
+                    local re = n:FindFirstChild("RemoteEvent")
+                    if re then
+                        storeEvent = re:FindFirstChild("Store")
+                        swingEvent = re:FindFirstChild("SwingMelee")
+                        useEvent = re:FindFirstChild("Use")
+                    end
+                end
+            end
+        end
+    end
+end)
 
 -- ============================================================
 --  设置
@@ -472,79 +490,6 @@ RunService.RenderStepped:Connect(function()
 end)
 
 -- ============================================================
---  刷物品功能
--- ============================================================
-
--- 建立 ID→名称 映射（0~10000）
-local function GetIdToNameMap()
-    local map = {}
-    for _, obj in ipairs(ReplicatedStorage:GetDescendants()) do
-        if obj:IsA("NumberValue") or obj:IsA("IntValue") or obj:IsA("StringValue") then
-            local name = obj.Name
-            local val = obj.Value
-            local id = type(val) == "number" and val or tonumber(val)
-            if id and id >= 0 and id <= 10000 then
-                map[id] = name
-            end
-        end
-    end
-    return map
-end
-
--- 模式1：随机刷（0~5000，全刷）
-local function SpawnRandom()
-    if not storeEvent then
-        WindUI:Notify({ Title = "❌ Store事件不存在", Duration = 3 })
-        return
-    end
-    for id = 0, 5000 do
-        pcall(function()
-            storeEvent:FireServer(id)
-            storeEvent:FireServer(id)  -- 调用两次
-        end)
-        task.wait(0.01)
-    end
-    WindUI:Notify({ Title = "✅ 随机刷完成", Content = "已刷 0~5000", Duration = 3 })
-end
-
--- 模式2：名称匹配刷（0~10000，匹配英文名，调用两次）
-local targetNames = {"Gold Bar", "Coal", "Bond"}  -- 在这里添加要刷的物品英文名
-
-local function SpawnByName()
-    if not storeEvent then
-        WindUI:Notify({ Title = "❌ Store事件不存在", Duration = 3 })
-        return
-    end
-
-    local idToName = GetIdToNameMap()
-    local found = {}
-    local count = 0
-
-    for id = 0, 10000 do
-        local name = idToName[id]
-        if name then
-            for _, target in ipairs(targetNames) do
-                if name:find(target) then
-                    pcall(function()
-                        storeEvent:FireServer(id)
-                        storeEvent:FireServer(id)  -- 调用两次
-                    end)
-                    count = count + 1
-                    break
-                end
-            end
-        end
-        task.wait(0.01)
-    end
-
-    WindUI:Notify({
-        Title = "✅ 名称匹配刷完成",
-        Content = "共刷 " .. count .. " 件",
-        Duration = 4,
-    })
-end
-
--- ============================================================
 --  飞行功能
 -- ============================================================
 local flyEnabled = false
@@ -667,12 +612,15 @@ RunService.Heartbeat:Connect(function()
     if (hp / maxHp) * 100 < Settings.healThreshold and hp > 0 then
         local now = os.clock()
         if now - lastHealTime >= healCooldown then
-            local idToName = GetIdToNameMap()
             local snakeId = nil
-            for id, name in pairs(idToName) do
-                if name:find("Snake Oil") or name:find("蛇油") then
-                    snakeId = id
-                    break
+            for _, obj in ipairs(ReplicatedStorage:GetDescendants()) do
+                if obj:IsA("NumberValue") or obj:IsA("IntValue") or obj:IsA("StringValue") then
+                    local name = obj.Name
+                    if name:find("Snake Oil") or name:find("蛇油") then
+                        local val = obj.Value
+                        snakeId = type(val) == "number" and val or tonumber(val)
+                        break
+                    end
                 end
             end
             if snakeId then
@@ -888,34 +836,193 @@ WeaponTab:Slider({
 })
 
 -- ============================================================
---  物品标签页
+--  物品标签页（随机刷 + 名称匹配刷 + 速度可选 + 停止）
 -- ============================================================
 local ItemTab = Window:Tab({ Title = "物品", Icon = "solar:box-bold" })
 
+-- 中文→英文 名称映射
+local ItemNameTranslate = {
+    ["金条"] = "Gold Bar",
+    ["银条"] = "Silver Bar",
+    ["煤"] = "Coal",
+    ["债券"] = "Bond",
+    ["金酒杯"] = "Gold Cup",
+    ["银酒杯"] = "Silver Cup",
+    ["金盘子"] = "Gold Plate",
+    ["银盘子"] = "Silver Plate",
+    ["金画像"] = "Gold Painting",
+    ["银画像"] = "Silver Painting",
+    ["金雕像"] = "Gold Statue",
+    ["银雕像"] = "Silver Statue",
+    ["步枪"] = "Rifle",
+    ["手枪"] = "Pistol",
+    ["海军手枪"] = "Navy Pistol",
+    ["散弹枪"] = "Shotgun",
+    ["烟花枪"] = "Firework Gun",
+    ["吸血鬼刀"] = "Vampire Knife",
+    ["翡翠宝刀"] = "Jade Sword",
+    ["步枪子弹"] = "Rifle Bullet",
+    ["散弹枪子弹"] = "Shotgun Bullet",
+    ["中型子弹"] = "Medium Bullet",
+    ["重型子弹"] = "Heavy Bullet",
+    ["轻型子弹"] = "Light Bullet",
+    ["烟花枪子弹"] = "Firework Bullet",
+    ["蛇油"] = "Snake Oil",
+    ["绷带"] = "Bandage",
+    ["奇怪的面具"] = "Mask",
+    ["危险巴士"] = "Bus",
+}
+
+-- 获取当前局所有物品 ID→名称 映射
+local function GetIdToNameMap()
+    local map = {}
+    for _, obj in ipairs(ReplicatedStorage:GetDescendants()) do
+        if obj:IsA("NumberValue") or obj:IsA("IntValue") or obj:IsA("StringValue") then
+            local name = obj.Name
+            local val = obj.Value
+            local id = type(val) == "number" and val or tonumber(val)
+            if id and id >= 0 and id <= 10000 then
+                map[id] = name
+            end
+        end
+    end
+    return map
+end
+
+-- ----- 1. 随机刷（0~5000） -----
 ItemTab:Button({
     Title = "🎲 随机刷（0~5000）",
     Callback = function()
-        SpawnRandom()
-    end,
-})
-
-ItemTab:Button({
-    Title = "🎯 名称匹配刷",
-    Callback = function()
-        SpawnByName()
-    end,
-})
-
-ItemTab:Button({
-    Title = "🔍 扫描物品",
-    Callback = function()
-        local idToName = GetIdToNameMap()
-        local count = 0
-        for id, name in pairs(idToName) do
-            count = count + 1
-            print(id .. " -> " .. name)
+        if not storeEvent then
+            WindUI:Notify({ Title = "❌ Store事件不存在", Duration = 3 })
+            return
         end
-        WindUI:Notify({ Title = "✅ 扫描完成", Content = "共 " .. count .. " 个物品", Duration = 4 })
+        for id = 0, 5000 do
+            pcall(function()
+                storeEvent:FireServer(id)
+                storeEvent:FireServer(id)
+            end)
+            task.wait(0.01)
+        end
+        WindUI:Notify({ Title = "✅ 随机刷完成", Content = "已刷 0~5000", Duration = 3 })
+    end,
+})
+
+-- ----- 2. 名称匹配刷（中文界面，英文匹配，速度可选） -----
+local selectedItem = nil
+local spawnRunning = false
+local spawnCoroutine = nil
+local spawnSpeed = 0.05  -- 默认中速
+
+-- 速度选择
+ItemTab:Dropdown({
+    Title = "选择刷取速度",
+    Values = {"低速（安全）", "中速（推荐）", "高速（慎用）"},
+    Value = "中速（推荐）",
+    Callback = function(value)
+        if value == "低速（安全）" then
+            spawnSpeed = 0.1
+        elseif value == "中速（推荐）" then
+            spawnSpeed = 0.05
+        else  -- 高速
+            spawnSpeed = 0.02
+        end
+        WindUI:Notify({ Title = "✅ 速度已切换", Content = "当前: " .. value, Duration = 2 })
+    end,
+})
+
+ItemTab:Dropdown({
+    Title = "选择要刷的物品（中文）",
+    Values = {"金条", "银条", "煤", "债券", "金酒杯", "银酒杯", "金盘子", "银盘子", "金画像", "银画像", "金雕像", "银雕像", "步枪", "手枪", "海军手枪", "散弹枪", "烟花枪", "吸血鬼刀", "翡翠宝刀", "步枪子弹", "散弹枪子弹", "中型子弹", "重型子弹", "轻型子弹", "烟花枪子弹", "蛇油", "绷带", "奇怪的面具", "危险巴士"},
+    Value = nil,
+    Callback = function(value)
+        selectedItem = value
+        WindUI:Notify({ Title = "✅ 已选择", Content = "物品: " .. (selectedItem or "无"), Duration = 2 })
+    end,
+})
+
+ItemTab:Button({
+    Title = "🎯 开始刷选中物品",
+    Callback = function()
+        if not selectedItem then
+            WindUI:Notify({ Title = "⚠️ 请先选择物品", Duration = 2 })
+            return
+        end
+        if not storeEvent then
+            WindUI:Notify({ Title = "❌ Store事件不存在", Duration = 3 })
+            return
+        end
+        if spawnRunning then
+            WindUI:Notify({ Title = "⚠️ 正在刷取中，请先停止", Duration = 2 })
+            return
+        end
+
+        local englishName = ItemNameTranslate[selectedItem]
+        if not englishName then
+            WindUI:Notify({ Title = "⚠️ 未找到英文名", Content = selectedItem, Duration = 2 })
+            return
+        end
+
+        local idToName = GetIdToNameMap()
+        local targetId = nil
+        for id, name in pairs(idToName) do
+            if name:find(englishName) then
+                targetId = id
+                break
+            end
+        end
+
+        if not targetId then
+            WindUI:Notify({ Title = "❌ 未找到匹配ID", Content = "英文名: " .. englishName, Duration = 3 })
+            return
+        end
+
+        spawnRunning = true
+        local count = 0
+        WindUI:Notify({
+            Title = "🔄 开始刷取",
+            Content = selectedItem .. " (ID: " .. targetId .. ")",
+            Duration = 2,
+        })
+
+        spawnCoroutine = task.spawn(function()
+            local lastNotify = tick()
+            while spawnRunning do
+                pcall(function()
+                    storeEvent:FireServer(targetId)
+                    storeEvent:FireServer(targetId)
+                end)
+                count = count + 2
+                task.wait(spawnSpeed)
+
+                if tick() - lastNotify >= 3 then
+                    lastNotify = tick()
+                    if spawnRunning then
+                        WindUI:Notify({
+                            Title = "📊 刷取中",
+                            Content = "已刷 " .. count .. " 件",
+                            Duration = 2,
+                        })
+                    end
+                end
+            end
+        end)
+    end,
+})
+
+ItemTab:Button({
+    Title = "⏹ 停止刷取",
+    Callback = function()
+        if not spawnRunning then
+            WindUI:Notify({ Title = "⚠️ 当前没有正在刷取", Duration = 2 })
+            return
+        end
+        spawnRunning = false
+        if spawnCoroutine then
+            task.cancel(spawnCoroutine)
+            spawnCoroutine = nil
+        end
+        WindUI:Notify({ Title = "✅ 已停止刷取", Duration = 2 })
     end,
 })
 
@@ -982,8 +1089,8 @@ end
 PlayStartSound()
 
 WindUI:Notify({
-    Title = "✅ DFN脚本已加载",
-    Content = "点击菜单按钮开始使用",
+    Title = "✅ 开启成功",
+    Content = "DFN脚本已加载，点击菜单使用",
     Icon = "solar:check-circle-bold",
     Duration = 4,
 })
