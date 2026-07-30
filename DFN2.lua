@@ -1,762 +1,963 @@
 -- ============================================================
---  原始骷髅脚本 - 只修改刷物品（名称匹配）
---  其他全部保留：GUI · 自瞄 · 透视 · 飞行 · 自动攻击 · 自动喝药
+--  DFN脚本 - 完整版（WindUI）
+--  刷物品：名称匹配刷（Gold Bar / Coal / Bond）
+--  功能：自瞄 · 透视 · 夜视 · 子弹追踪 · 飞行 · 自动攻击 · 自动喝药
 -- ============================================================
 
-local Players = game:GetService("Players")
-local player = Players.LocalPlayer
 local RunService = game:GetService("RunService")
+local Players = game:GetService("Players")
+local LocalPlayer = Players.LocalPlayer
+local Workspace = game:GetService("Workspace")
+local Camera = workspace.CurrentCamera
+local UserInputService = game:GetService("UserInputService")
+local Lighting = game:GetService("Lighting")
+local SoundService = game:GetService("SoundService")
+local Debris = game:GetService("Debris")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
-repeat task.wait() until player and player:FindFirstChild("PlayerGui")
-local playerGui = player.PlayerGui
+-- ============================================================
+--  加载 WindUI
+-- ============================================================
+local WindUI = loadstring(game:HttpGet("https://raw.githubusercontent.com/Footagesus/WindUI/main/dist/main.lua"))()
 
-local old = playerGui:FindFirstChild("SkeletonGUI")
-if old then old:Destroy() end
+-- ============================================================
+--  获取网络事件
+-- ============================================================
+local storeEvent = ReplicatedStorage.Shared.Universe.Network.RemoteEvent.Store
+local swingEvent = ReplicatedStorage.Shared.Universe.Network.RemoteEvent.SwingMelee
+local useEvent = ReplicatedStorage.Shared.Universe.Network.RemoteEvent.Use
 
-local screenGui = Instance.new("ScreenGui")
-screenGui.Name = "SkeletonGUI"
-screenGui.Parent = playerGui
-screenGui.ResetOnSpawn = false
-screenGui.Enabled = true
+-- ============================================================
+--  中文映射
+-- ============================================================
+local NameTranslate = {
+    ["Zombie"] = "僵尸",
+    ["Skeleton"] = "骷髅",
+    ["Bandit"] = "强盗",
+    ["Guard"] = "守卫",
+    ["Boss"] = "BOSS",
+    ["NewspaperBoy"] = "报童",
+}
+local function GetDisplayName(model)
+    local eng = model.Name
+    return NameTranslate[eng] or eng
+end
 
-local swingEvent, storeEvent
-pcall(function()
-    local r = game:GetService("ReplicatedStorage")
-    if r then
-        local sh = r:FindFirstChild("Shared")
-        if sh then
-            local u = sh:FindFirstChild("Universe")
-            if u then
-                local n = u:FindFirstChild("Network")
-                if n then
-                    local re = n:FindFirstChild("RemoteEvent")
-                    if re then
-                        swingEvent = re:FindFirstChild("SwingMelee")
-                        storeEvent = re:FindFirstChild("Store")
-                    end
-                end
-            end
-        end
-    end
-end)
+-- ============================================================
+--  设置
+-- ============================================================
+local Settings = {
+    aimbot = false,
+    aimPart = "Head",
+    fov = 80,
+    maxDist = 300,
+    wallCheck = false,
+    predict = false,
+    autoFire = false,
+    bulletTrack = false,
+    bulletSpeed = 150,
+    esp = false,
+    espBox = true,
+    espName = true,
+    espDistance = true,
+    npcHighlight = false,
+    showFOV = false,
+    nightVision = false,
+    rayLine = false,
+    flyMode = false,
+    attackMode = false,
+    healMode = false,
+    swingSpeed = 0.02,
+    healThreshold = 50,
+}
 
+local touchCount = 0
+local lastHealTime = 0
+local healCooldown = 2
+
+-- ============================================================
+--  武器配置
+-- ============================================================
 local weaponConfigs = {
-    {get = function() return player.Backpack:FindFirstChild("Shovel") end, id = 1784980835.0023, dir = Vector3.new(-0.98141527175903, -0.17157469689846, -0.085943520069122)},
-    {get = function() local c = player.Character return c and c:FindFirstChild("Shovel") end, id = 1784971142.9326, dir = Vector3.new(0.23211443424225, -0.49000316858292, 0.84024983644485)},
-    {get = function() local c = player.Character return c and c:FindFirstChild("Vampire Knife") end, id = 1784980843.3721, dir = Vector3.new(0.88972532749176, 0.1092592254281, -0.44322821497917)},
-    {get = function() return player.Backpack:FindFirstChild("Tomahawk") end, id = 1784980842.62, dir = Vector3.new(0.88228863477707, 0.12052091211081, -0.45501813292503)},
-    {get = function() return player.Backpack:FindFirstChild("Jade Sword") end, id = 1784980841.9156, dir = Vector3.new(0.88118195533752, 0.1211147531867, -0.45700073242188)}
+    {get = function() return LocalPlayer.Backpack:FindFirstChild("Shovel") end, id = 1784980835.0023, dir = Vector3.new(-0.98141527175903, -0.17157469689846, -0.085943520069122)},
+    {get = function() local c = LocalPlayer.Character return c and c:FindFirstChild("Shovel") end, id = 1784971142.9326, dir = Vector3.new(0.23211443424225, -0.49000316858292, 0.84024983644485)},
+    {get = function() local c = LocalPlayer.Character return c and c:FindFirstChild("Vampire Knife") end, id = 1784980843.3721, dir = Vector3.new(0.88972532749176, 0.1092592254281, -0.44322821497917)},
+    {get = function() return LocalPlayer.Backpack:FindFirstChild("Tomahawk") end, id = 1784980842.62, dir = Vector3.new(0.88228863477707, 0.12052091211081, -0.45501813292503)},
+    {get = function() return LocalPlayer.Backpack:FindFirstChild("Jade Sword") end, id = 1784980841.9156, dir = Vector3.new(0.88118195533752, 0.1211147531867, -0.45700073242188)}
 }
 
 -- ============================================================
---  GUI（原始手搓菜单，保留不变）
+--  NPC列表
 -- ============================================================
-local main = Instance.new("ScreenGui")
-main.Name = "main"
-main.Parent = playerGui
-main.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-main.ResetOnSpawn = false
-
-local Frame = Instance.new("Frame")
-Frame.Parent = main
-Frame.BackgroundColor3 = Color3.fromRGB(163, 255, 137)
-Frame.BorderColor3 = Color3.fromRGB(103, 221, 213)
-Frame.Position = UDim2.new(0.100320168, 0, 0.379746825, 0)
-Frame.Size = UDim2.new(0, 190, 0, 130)
-Frame.Active = true
-Frame.Draggable = true
-
-local TextLabel = Instance.new("TextLabel")
-TextLabel.Parent = Frame
-TextLabel.BackgroundColor3 = Color3.fromRGB(242, 60, 255)
-TextLabel.Position = UDim2.new(0.35, 0, 0, 0)
-TextLabel.Size = UDim2.new(0, 80, 0, 25)
-TextLabel.Font = Enum.Font.SourceSans
-TextLabel.Text = "💀 骷髅脚本"
-TextLabel.TextColor3 = Color3.fromRGB(0, 0, 0)
-TextLabel.TextScaled = true
-TextLabel.TextSize = 14
-TextLabel.TextWrapped = true
-
-local up = Instance.new("TextButton")
-up.Parent = Frame
-up.BackgroundColor3 = Color3.fromRGB(79, 255, 152)
-up.Size = UDim2.new(0, 35, 0, 22)
-up.Position = UDim2.new(0, 0, 0, 28)
-up.Font = Enum.Font.SourceSans
-up.Text = "UP"
-up.TextColor3 = Color3.fromRGB(0, 0, 0)
-up.TextSize = 12
-up.Active = true
-up.Selectable = true
-
-local down = Instance.new("TextButton")
-down.Parent = Frame
-down.BackgroundColor3 = Color3.fromRGB(215, 255, 121)
-down.Position = UDim2.new(0, 0, 0.491, 28)
-down.Size = UDim2.new(0, 35, 0, 22)
-down.Font = Enum.Font.SourceSans
-down.Text = "DOWN"
-down.TextColor3 = Color3.fromRGB(0, 0, 0)
-down.TextSize = 12
-down.Active = true
-down.Selectable = true
-
-local onof = Instance.new("TextButton")
-onof.Parent = Frame
-onof.BackgroundColor3 = Color3.fromRGB(255, 249, 74)
-onof.Position = UDim2.new(0.45, 0, 0.491, 28)
-onof.Size = UDim2.new(0, 40, 0, 22)
-onof.Font = Enum.Font.SourceSans
-onof.Text = "fly"
-onof.TextColor3 = Color3.fromRGB(0, 0, 0)
-onof.TextSize = 12
-onof.Active = true
-onof.Selectable = true
-
-local plus = Instance.new("TextButton")
-plus.Parent = Frame
-plus.BackgroundColor3 = Color3.fromRGB(133, 145, 255)
-plus.Position = UDim2.new(0.18, 0, 0, 28)
-plus.Size = UDim2.new(0, 25, 0, 22)
-plus.Font = Enum.Font.SourceSans
-plus.Text = "+"
-plus.TextColor3 = Color3.fromRGB(0, 0, 0)
-plus.TextScaled = true
-plus.TextSize = 12
-plus.Active = true
-plus.Selectable = true
-
-local speedDisplay = Instance.new("TextLabel")
-speedDisplay.Parent = Frame
-speedDisplay.BackgroundColor3 = Color3.fromRGB(255, 85, 0)
-speedDisplay.Position = UDim2.new(0.3, 0, 0.491, 28)
-speedDisplay.Size = UDim2.new(0, 25, 0, 22)
-speedDisplay.Font = Enum.Font.SourceSans
-speedDisplay.Text = "1"
-speedDisplay.TextColor3 = Color3.fromRGB(0, 0, 0)
-speedDisplay.TextScaled = true
-speedDisplay.TextSize = 12
-speedDisplay.TextWrapped = true
-
-local mine = Instance.new("TextButton")
-mine.Parent = Frame
-mine.BackgroundColor3 = Color3.fromRGB(123, 255, 247)
-mine.Position = UDim2.new(0.18, 0, 0.491, 28)
-mine.Size = UDim2.new(0, 25, 0, 22)
-mine.Font = Enum.Font.SourceSans
-mine.Text = "-"
-mine.TextColor3 = Color3.fromRGB(0, 0, 0)
-mine.TextScaled = true
-mine.TextSize = 12
-mine.Active = true
-mine.Selectable = true
-
-local attackBtn = Instance.new("TextButton")
-attackBtn.Parent = Frame
-attackBtn.BackgroundColor3 = Color3.fromRGB(200, 100, 200)
-attackBtn.Position = UDim2.new(0.02, 0, 0, 55)
-attackBtn.Size = UDim2.new(0, 40, 0, 22)
-attackBtn.Font = Enum.Font.SourceSans
-attackBtn.Text = "⚔️"
-attackBtn.TextColor3 = Color3.fromRGB(255,255,255)
-attackBtn.TextSize = 12
-attackBtn.Active = true
-attackBtn.Selectable = true
-
-local itemBtn = Instance.new("TextButton")
-itemBtn.Parent = Frame
-itemBtn.BackgroundColor3 = Color3.fromRGB(100, 150, 200)
-itemBtn.Position = UDim2.new(0.24, 0, 0, 55)
-itemBtn.Size = UDim2.new(0, 40, 0, 22)
-itemBtn.Font = Enum.Font.SourceSans
-itemBtn.Text = "📦"
-itemBtn.TextColor3 = Color3.fromRGB(255,255,255)
-itemBtn.TextSize = 12
-itemBtn.Active = true
-itemBtn.Selectable = true
-
-local healBtn = Instance.new("TextButton")
-healBtn.Parent = Frame
-healBtn.BackgroundColor3 = Color3.fromRGB(0, 150, 100)
-healBtn.Position = UDim2.new(0.46, 0, 0, 55)
-healBtn.Size = UDim2.new(0, 40, 0, 22)
-healBtn.Font = Enum.Font.SourceSans
-healBtn.Text = "💚"
-healBtn.TextColor3 = Color3.fromRGB(255,255,255)
-healBtn.TextSize = 12
-healBtn.Active = true
-healBtn.Selectable = true
-
-local closebutton = Instance.new("TextButton")
-closebutton.Name = "Close"
-closebutton.Parent = main.Frame
-closebutton.BackgroundColor3 = Color3.fromRGB(225, 25, 0)
-closebutton.Font = "SourceSans"
-closebutton.Size = UDim2.new(0, 30, 0, 22)
-closebutton.Text = "X"
-closebutton.TextSize = 20
-closebutton.Position = UDim2.new(0, 0, -1, 27)
-closebutton.Active = true
-closebutton.Selectable = true
-
-local mini = Instance.new("TextButton")
-mini.Parent = main.Frame
-mini.BackgroundColor3 = Color3.fromRGB(192, 150, 230)
-mini.Font = "SourceSans"
-mini.Size = UDim2.new(0, 30, 0, 22)
-mini.Text = "-"
-mini.TextSize = 24
-mini.Position = UDim2.new(0, 30, -1, 27)
-mini.Active = true
-mini.Selectable = true
-
-local mini2 = Instance.new("TextButton")
-mini2.Name = "minimize2"
-mini2.Parent = main.Frame
-mini2.BackgroundColor3 = Color3.fromRGB(192, 150, 230)
-mini2.Font = "SourceSans"
-mini2.Size = UDim2.new(0, 30, 0, 22)
-mini2.Text = "+"
-mini2.TextSize = 24
-mini2.Position = UDim2.new(0, 30, -1, 57)
-mini2.Visible = false
-mini2.Active = true
-mini2.Selectable = true
-
-local speedLabel = Instance.new("TextLabel")
-speedLabel.Parent = Frame
-speedLabel.BackgroundTransparency = 1
-speedLabel.Position = UDim2.new(0.02, 0, 0, 80)
-speedLabel.Size = UDim2.new(0, 60, 0, 16)
-speedLabel.Font = Enum.Font.SourceSans
-speedLabel.Text = "攻速"
-speedLabel.TextColor3 = Color3.fromRGB(0,0,0)
-speedLabel.TextSize = 10
-
-local speedSlider = Instance.new("Frame")
-speedSlider.Parent = Frame
-speedSlider.BackgroundColor3 = Color3.fromRGB(200,200,200)
-speedSlider.Position = UDim2.new(0.35, 0, 0, 80)
-speedSlider.Size = UDim2.new(0, 60, 0, 14)
-speedSlider.BorderSizePixel = 0
-
-local speedFill = Instance.new("Frame")
-speedFill.Parent = speedSlider
-speedFill.BackgroundColor3 = Color3.fromRGB(50,150,255)
-speedFill.Size = UDim2.new(0.5, 0, 1, 0)
-speedFill.BorderSizePixel = 0
-
-local speedHandle = Instance.new("TextButton")
-speedHandle.Parent = speedSlider
-speedHandle.BackgroundColor3 = Color3.fromRGB(255,255,255)
-speedHandle.Size = UDim2.new(0, 12, 0, 12)
-speedHandle.Position = UDim2.new(0.5, -6, 0.5, -6)
-speedHandle.Text = ""
-speedHandle.BorderSizePixel = 1
-speedHandle.BorderColor3 = Color3.fromRGB(0,0,0)
-speedHandle.Active = true
-speedHandle.Selectable = true
-
-local healLabel = Instance.new("TextLabel")
-healLabel.Parent = Frame
-healLabel.BackgroundTransparency = 1
-healLabel.Position = UDim2.new(0.02, 0, 0, 100)
-healLabel.Size = UDim2.new(0, 60, 0, 16)
-healLabel.Font = Enum.Font.SourceSans
-healLabel.Text = "阈值"
-healLabel.TextColor3 = Color3.fromRGB(0,0,0)
-healLabel.TextSize = 10
-
-local healSlider = Instance.new("Frame")
-healSlider.Parent = Frame
-healSlider.BackgroundColor3 = Color3.fromRGB(200,200,200)
-healSlider.Position = UDim2.new(0.35, 0, 0, 100)
-healSlider.Size = UDim2.new(0, 60, 0, 14)
-healSlider.BorderSizePixel = 0
-
-local healFill = Instance.new("Frame")
-healFill.Parent = healSlider
-healFill.BackgroundColor3 = Color3.fromRGB(50,200,50)
-healFill.Size = UDim2.new(0.5, 0, 1, 0)
-healFill.BorderSizePixel = 0
-
-local healHandle = Instance.new("TextButton")
-healHandle.Parent = healSlider
-healHandle.BackgroundColor3 = Color3.fromRGB(255,255,255)
-healHandle.Size = UDim2.new(0, 12, 0, 12)
-healHandle.Position = UDim2.new(0.5, -6, 0.5, -6)
-healHandle.Text = ""
-healHandle.BorderSizePixel = 1
-healHandle.BorderColor3 = Color3.fromRGB(0,0,0)
-healHandle.Active = true
-healHandle.Selectable = true
-
-local swingSpeed = 0.02
-local minSpeed = 0.001
-local maxSpeed = 0.1
-local healThreshold = 50
-local minHeal = 10
-local maxHeal = 90
-
-local function updateSpeed(input)
-    local rel = math.clamp((input.Position.X - speedSlider.AbsolutePosition.X) / speedSlider.AbsoluteSize.X, 0, 1)
-    swingSpeed = minSpeed + rel * (maxSpeed - minSpeed)
-    speedFill.Size = UDim2.new(rel, 0, 1, 0)
-    speedHandle.Position = UDim2.new(rel, -6, 0.5, -6)
+local function GetNPCList()
+    local npcs = {}
+    for _, obj in ipairs(Workspace:GetDescendants()) do
+        if obj:IsA("Humanoid") and obj.Health > 0 then
+            local model = obj.Parent
+            if model and model:IsA("Model") then
+                if not Players:GetPlayerFromCharacter(model) then
+                    table.insert(npcs, { model = model, humanoid = obj })
+                end
+            end
+        end
+    end
+    return npcs
 end
 
-speedHandle.InputBegan:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
-        updateSpeed(input)
-    end
-end)
-speedHandle.InputChanged:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseMovement then
-        updateSpeed(input)
-    end
-end)
-speedSlider.InputBegan:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
-        updateSpeed(input)
-    end
-end)
-
-local function updateHeal(input)
-    local rel = math.clamp((input.Position.X - healSlider.AbsolutePosition.X) / healSlider.AbsoluteSize.X, 0, 1)
-    healThreshold = math.round(minHeal + rel * (maxHeal - minHeal))
-    healFill.Size = UDim2.new(rel, 0, 1, 0)
-    healHandle.Position = UDim2.new(rel, -6, 0.5, -6)
+local function GetTargetPart(model)
+    if not model then return nil end
+    local partName = Settings.aimPart == "Head" and "Head" or "UpperTorso"
+    return model:FindFirstChild(partName) or model:FindFirstChild("HumanoidRootPart")
 end
 
-healHandle.InputBegan:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
-        updateHeal(input)
+local function CheckWall(part)
+    if not Settings.wallCheck then return true end
+    local origin = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Head")
+    if not origin then return false end
+    local params = RaycastParams.new()
+    params.FilterType = Enum.RaycastFilterType.Blacklist
+    params.FilterDescendantsInstances = {LocalPlayer.Character}
+    local result = Workspace:Raycast(origin.Position, (part.Position - origin.Position), params)
+    if not result then return true end
+    return result.Instance:IsDescendantOf(part.Parent)
+end
+
+local function PredictPosition(part)
+    return part.Position + part.AssemblyLinearVelocity * 0.1
+end
+
+-- ============================================================
+--  绘制对象
+-- ============================================================
+local fovCircle = Drawing.new("Circle")
+fovCircle.Thickness = 1.5
+fovCircle.Color = Color3.fromRGB(255, 255, 255)
+fovCircle.Filled = false
+fovCircle.Visible = false
+
+local targetInfo = Drawing.new("Text")
+targetInfo.Size = 16
+targetInfo.Color = Color3.fromRGB(255, 255, 255)
+targetInfo.Center = true
+targetInfo.Outline = true
+targetInfo.OutlineColor = Color3.fromRGB(0, 0, 0)
+targetInfo.Visible = false
+
+local rayLines = {}
+
+-- ============================================================
+--  自瞄
+-- ============================================================
+local currentTarget = nil
+local aimLockTime = 0
+
+local function GetBestNPCTarget()
+    if not Settings.aimbot then return nil end
+    local center = Camera.ViewportSize / 2
+    local bestScore = -math.huge
+    local best = nil
+    for _, npc in ipairs(GetNPCList()) do
+        local part = GetTargetPart(npc.model)
+        if not part then continue end
+        local dist = (part.Position - Camera.CFrame.Position).Magnitude
+        if dist > Settings.maxDist then continue end
+        local sp, on = Camera:WorldToViewportPoint(part.Position)
+        if not on then continue end
+        local md = (Vector2.new(sp.X, sp.Y) - center).Magnitude
+        if md > Settings.fov then continue end
+        if not CheckWall(part) then continue end
+        local score = -dist * 0.3 - md * 0.5
+        if score > bestScore then
+            bestScore = score
+            best = {
+                model = npc.model,
+                part = part,
+                position = part.Position,
+                distance = dist,
+                screenPos = Vector2.new(sp.X, sp.Y),
+                humanoid = npc.humanoid,
+            }
+        end
     end
-end)
-healHandle.InputChanged:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseMovement then
-        updateHeal(input)
+    return best
+end
+
+local function UpdateAimbot()
+    if not Settings.aimbot then
+        targetInfo.Visible = false
+        currentTarget = nil
+        return
     end
-end)
-healSlider.InputBegan:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
-        updateHeal(input)
+
+    local now = tick()
+    if not currentTarget or (now - aimLockTime) > 0.1 then
+        currentTarget = GetBestNPCTarget()
+        aimLockTime = now
+    end
+
+    if not currentTarget then
+        targetInfo.Visible = false
+        return
+    end
+
+    if not currentTarget.humanoid or currentTarget.humanoid.Health <= 0 then
+        currentTarget = nil
+        targetInfo.Visible = false
+        return
+    end
+
+    local part = GetTargetPart(currentTarget.model)
+    if not part then
+        currentTarget = nil
+        return
+    end
+    currentTarget.part = part
+    currentTarget.position = part.Position
+
+    local targetPos = Settings.predict and PredictPosition(currentTarget.part) or currentTarget.part.Position
+    local camPos = Camera.CFrame.Position
+    Camera.CFrame = CFrame.new(camPos, targetPos)
+
+    local sp, on = Camera:WorldToViewportPoint(targetPos)
+    if on then
+        currentTarget.screenPos = Vector2.new(sp.X, sp.Y)
+    end
+
+    local hp = currentTarget.humanoid and math.floor(currentTarget.humanoid.Health) or "?"
+    targetInfo.Text = GetDisplayName(currentTarget.model) .. " [" .. hp .. "HP]  " .. math.floor(currentTarget.distance) .. "m"
+    targetInfo.Position = Vector2.new(Camera.ViewportSize.X / 2, 40)
+    targetInfo.Visible = true
+
+    if Settings.autoFire then
+        local tool = LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Tool")
+        if tool then pcall(function() tool:Activate() end) end
+    end
+end
+
+-- ============================================================
+--  子弹追踪
+-- ============================================================
+local function TrackBullets()
+    if not Settings.bulletTrack then return end
+
+    local bestNPC, bestDist = nil, math.huge
+    for _, npc in ipairs(GetNPCList()) do
+        local part = GetTargetPart(npc.model)
+        if part then
+            local d = (part.Position - Camera.CFrame.Position).Magnitude
+            if d < bestDist then bestDist = d; bestNPC = npc end
+        end
+    end
+    if not bestNPC then return end
+
+    local targetPart = GetTargetPart(bestNPC.model)
+    if not targetPart then return end
+    local targetPos = Settings.predict and PredictPosition(targetPart) or targetPart.Position
+
+    for _, obj in ipairs(Workspace:GetDescendants()) do
+        if obj:IsA("BasePart") then
+            local vel = obj.AssemblyLinearVelocity
+            if vel.Magnitude > 10 and vel.Magnitude < 5000 then
+                local name = obj.Name
+                local isBullet = name:find("步枪") or name:find("中型") or name:find("烟花") or
+                                 name:find("轻型") or name:find("重型") or name:find("子弹") or
+                                 name:lower():find("bullet") or name:lower():find("projectile")
+                if isBullet then
+                    local dir = (targetPos - obj.Position).Unit
+                    obj.AssemblyLinearVelocity = dir * Settings.bulletSpeed
+                    pcall(function() obj.CFrame = CFrame.new(obj.Position, targetPos) end)
+                end
+            end
+        end
+    end
+end
+
+-- ============================================================
+--  透视（含射线）
+-- ============================================================
+local espDrawings = {}
+
+local function UpdateESP()
+    local espOn = Settings.esp
+    for model, data in pairs(espDrawings) do
+        data.box.Visible = false
+        data.name.Visible = false
+        data.dist.Visible = false
+        data.hpBar.Visible = false
+        if data.highlight then data.highlight.Enabled = false end
+    end
+    for _, line in ipairs(rayLines) do
+        line.Visible = false
+    end
+    rayLines = {}
+
+    if not espOn then return end
+
+    local camPos = Camera.CFrame.Position
+    local currentModels = {}
+    local center = Camera.ViewportSize / 2
+
+    for _, npc in ipairs(GetNPCList()) do
+        local model = npc.model
+        local humanoid = npc.humanoid
+        currentModels[model] = true
+        local hp = humanoid.Health
+        if hp <= 0 then continue end
+
+        local hrp = model:FindFirstChild("HumanoidRootPart")
+        if not hrp then continue end
+        local dist = (hrp.Position - camPos).Magnitude
+        if dist > 400 then continue end
+        local sp, on = Camera:WorldToViewportPoint(hrp.Position)
+        if not on then continue end
+
+        local maxHp = humanoid.MaxHealth
+        local hpPercent = maxHp > 0 and math.clamp(hp / maxHp, 0, 1) or 1
+        local color = Color3.fromRGB(255, 80, 80)
+
+        if not espDrawings[model] then
+            local box = Drawing.new("Square")
+            box.Thickness = 1
+            box.Filled = false
+            box.Visible = false
+            local nameTxt = Drawing.new("Text")
+            nameTxt.Size = 14
+            nameTxt.Center = true
+            nameTxt.Outline = true
+            nameTxt.OutlineColor = Color3.fromRGB(0, 0, 0)
+            nameTxt.Visible = false
+            local distTxt = Drawing.new("Text")
+            distTxt.Size = 12
+            distTxt.Center = true
+            distTxt.Outline = true
+            distTxt.OutlineColor = Color3.fromRGB(0, 0, 0)
+            distTxt.Visible = false
+            local hpBar = Drawing.new("Line")
+            hpBar.Thickness = 3
+            hpBar.Color = Color3.fromRGB(0, 255, 0)
+            hpBar.Visible = false
+            espDrawings[model] = { box = box, name = nameTxt, dist = distTxt, hpBar = hpBar, highlight = nil }
+        end
+
+        local data = espDrawings[model]
+        local scale = 200 / math.max(dist, 1)
+        local w, h = 2 * scale, 3 * scale
+        local top, left = sp.Y - h / 2, sp.X - w / 2
+
+        if Settings.espBox then
+            data.box.Visible = true
+            data.box.Position = Vector2.new(left, top)
+            data.box.Size = Vector2.new(w, h)
+            data.box.Color = color
+        end
+
+        if Settings.espName then
+            data.name.Visible = true
+            data.name.Text = GetDisplayName(model) .. " [" .. math.floor(hp) .. "HP]"
+            data.name.Position = Vector2.new(sp.X, top - 14)
+            data.name.Color = Color3.fromRGB(255, 255, 255)
+        end
+
+        if Settings.espDistance then
+            data.dist.Visible = true
+            data.dist.Text = math.floor(dist) .. "m"
+            data.dist.Position = Vector2.new(sp.X, top + h + 12)
+        end
+
+        local barWidth = w
+        local barY = top + h + 4
+        local barLeft = sp.X - barWidth / 2
+        local barRight = barLeft + barWidth * hpPercent
+        data.hpBar.Visible = true
+        data.hpBar.From = Vector2.new(barLeft, barY)
+        data.hpBar.To = Vector2.new(barRight, barY)
+        data.hpBar.Color = color
+
+        if Settings.npcHighlight then
+            if not data.highlight then
+                local hl = Instance.new("Highlight")
+                hl.Adornee = model
+                hl.FillTransparency = 0.6
+                hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+                hl.Parent = model
+                data.highlight = hl
+            end
+            data.highlight.Enabled = true
+            data.highlight.OutlineColor = color
+            data.highlight.FillColor = color
+        end
+
+        if Settings.rayLine then
+            local line = Drawing.new("Line")
+            line.Thickness = 1.5
+            line.Color = Color3.fromRGB(255, 0, 0)
+            line.From = center
+            line.To = Vector2.new(sp.X, sp.Y)
+            line.Visible = true
+            table.insert(rayLines, line)
+        end
+    end
+
+    for model, data in pairs(espDrawings) do
+        if not currentModels[model] then
+            if data.highlight then data.highlight:Destroy() end
+            data.box:Remove()
+            data.name:Remove()
+            data.dist:Remove()
+            data.hpBar:Remove()
+            espDrawings[model] = nil
+        end
+    end
+end
+
+Workspace.DescendantRemoving:Connect(function(desc)
+    if desc:IsA("Model") and espDrawings[desc] then
+        local d = espDrawings[desc]
+        if d.highlight then d.highlight:Destroy() end
+        d.box:Remove()
+        d.name:Remove()
+        d.dist:Remove()
+        d.hpBar:Remove()
+        espDrawings[desc] = nil
     end
 end)
 
-local speeds = 1
-local speaker = game:GetService("Players").LocalPlayer
-local nowe = false
-local tpwalking = false
+-- ============================================================
+--  夜视
+-- ============================================================
+local originalAmbient, originalBrightness, originalClockTime, originalOutdoorAmbient, originalDiffuse, originalSpecular
 
-onof.Activated:Connect(function()
-    if nowe == true then
-        nowe = false
-        speaker.Character.Humanoid:SetStateEnabled(Enum.HumanoidStateType.Climbing,true)
-        speaker.Character.Humanoid:SetStateEnabled(Enum.HumanoidStateType.FallingDown,true)
-        speaker.Character.Humanoid:SetStateEnabled(Enum.HumanoidStateType.Flying,true)
-        speaker.Character.Humanoid:SetStateEnabled(Enum.HumanoidStateType.Freefall,true)
-        speaker.Character.Humanoid:SetStateEnabled(Enum.HumanoidStateType.GettingUp,true)
-        speaker.Character.Humanoid:SetStateEnabled(Enum.HumanoidStateType.Jumping,true)
-        speaker.Character.Humanoid:SetStateEnabled(Enum.HumanoidStateType.Landed,true)
-        speaker.Character.Humanoid:SetStateEnabled(Enum.HumanoidStateType.Physics,true)
-        speaker.Character.Humanoid:SetStateEnabled(Enum.HumanoidStateType.PlatformStanding,true)
-        speaker.Character.Humanoid:SetStateEnabled(Enum.HumanoidStateType.Ragdoll,true)
-        speaker.Character.Humanoid:SetStateEnabled(Enum.HumanoidStateType.Running,true)
-        speaker.Character.Humanoid:SetStateEnabled(Enum.HumanoidStateType.RunningNoPhysics,true)
-        speaker.Character.Humanoid:SetStateEnabled(Enum.HumanoidStateType.Seated,true)
-        speaker.Character.Humanoid:SetStateEnabled(Enum.HumanoidStateType.StrafingNoPhysics,true)
-        speaker.Character.Humanoid:SetStateEnabled(Enum.HumanoidStateType.Swimming,true)
-        speaker.Character.Humanoid:ChangeState(Enum.HumanoidStateType.RunningNoPhysics)
-        onof.Text = "fly"
-    else 
-        nowe = true
-        for i = 1, speeds do
-            spawn(function()
-                local hb = game:GetService("RunService").Heartbeat
-                tpwalking = true
-                local chr = game.Players.LocalPlayer.Character
-                local hum = chr and chr:FindFirstChildWhichIsA("Humanoid")
-                while tpwalking and hb:Wait() and chr and hum and hum.Parent do
-                    if hum.MoveDirection.Magnitude > 0 then
-                        chr:TranslateBy(hum.MoveDirection)
+local function SaveLighting()
+    originalAmbient = Lighting.Ambient
+    originalBrightness = Lighting.Brightness
+    originalClockTime = Lighting.ClockTime
+    originalOutdoorAmbient = Lighting.OutdoorAmbient
+    originalDiffuse = Lighting.EnvironmentDiffuseScale
+    originalSpecular = Lighting.EnvironmentSpecularScale
+end
+
+local function ForceNightVision()
+    if Settings.nightVision then
+        Lighting.Ambient = Color3.new(1, 1, 1)
+        Lighting.Brightness = 3
+        Lighting.ClockTime = 12
+        Lighting.OutdoorAmbient = Color3.new(1, 1, 1)
+        Lighting.EnvironmentDiffuseScale = 1
+        Lighting.EnvironmentSpecularScale = 1
+    else
+        if originalAmbient then
+            Lighting.Ambient = originalAmbient
+            Lighting.Brightness = originalBrightness
+            Lighting.ClockTime = originalClockTime
+            Lighting.OutdoorAmbient = originalOutdoorAmbient
+            Lighting.EnvironmentDiffuseScale = originalDiffuse
+            Lighting.EnvironmentSpecularScale = originalSpecular
+        end
+    end
+end
+
+SaveLighting()
+
+-- ============================================================
+--  主循环
+-- ============================================================
+RunService.RenderStepped:Connect(function()
+    fovCircle.Position = Camera.ViewportSize / 2
+    fovCircle.Radius = Settings.fov
+    fovCircle.Visible = Settings.showFOV
+    ForceNightVision()
+    UpdateAimbot()
+    TrackBullets()
+    UpdateESP()
+end)
+
+-- ============================================================
+--  飞行功能
+-- ============================================================
+local flyEnabled = false
+local flyBV = nil
+
+local function ToggleFly()
+    flyEnabled = not flyEnabled
+    local char = LocalPlayer.Character
+    if not char then return end
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    if not hum then return end
+
+    if flyEnabled then
+        hum.PlatformStand = true
+        for _, state in ipairs(Enum.HumanoidStateType:GetEnumItems()) do
+            hum:SetStateEnabled(state, false)
+        end
+        hum:SetStateEnabled(Enum.HumanoidStateType.Climbing, true)
+        hum:SetStateEnabled(Enum.HumanoidStateType.Flying, true)
+        hum:SetStateEnabled(Enum.HumanoidStateType.RunningNoPhysics, true)
+        hum:SetStateEnabled(Enum.HumanoidStateType.StrafingNoPhysics, true)
+        hum:ChangeState(Enum.HumanoidStateType.Flying)
+        char.Animate.Disabled = true
+
+        flyBV = Instance.new("BodyVelocity")
+        flyBV.MaxForce = Vector3.new(1e9, 1e9, 1e9)
+        flyBV.Velocity = Vector3.new(0, 0, 0)
+        flyBV.Parent = char
+
+        WindUI:Notify({ Title = "✅ 飞行已开启", Content = "WASD移动，Space上升，Shift下降", Duration = 3 })
+
+        task.spawn(function()
+            while flyEnabled and char and char.Parent do
+                local hrp = char:FindFirstChild("HumanoidRootPart")
+                if not hrp then break end
+                local move = Vector3.new(0, 0, 0)
+                local speed = 50
+                if UserInputService:IsKeyDown(Enum.KeyCode.W) then move = move + Camera.CFrame.LookVector * speed end
+                if UserInputService:IsKeyDown(Enum.KeyCode.S) then move = move - Camera.CFrame.LookVector * speed end
+                if UserInputService:IsKeyDown(Enum.KeyCode.A) then move = move - Camera.CFrame.RightVector * speed end
+                if UserInputService:IsKeyDown(Enum.KeyCode.D) then move = move + Camera.CFrame.RightVector * speed end
+                if UserInputService:IsKeyDown(Enum.KeyCode.Space) then move = move + Vector3.new(0, speed, 0) end
+                if UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) then move = move - Vector3.new(0, speed, 0) end
+                flyBV.Velocity = move
+                task.wait()
+            end
+        end)
+    else
+        hum.PlatformStand = false
+        for _, state in ipairs(Enum.HumanoidStateType:GetEnumItems()) do
+            hum:SetStateEnabled(state, true)
+        end
+        char.Animate.Disabled = false
+        hum:ChangeState(Enum.HumanoidStateType.RunningNoPhysics)
+        if flyBV then flyBV:Destroy() flyBV = nil end
+        WindUI:Notify({ Title = "✅ 飞行已关闭", Duration = 2 })
+    end
+end
+
+-- ============================================================
+--  自动攻击
+-- ============================================================
+local attackRunning = false
+local attackCoroutine = nil
+
+local function ToggleAttack()
+    attackRunning = not attackRunning
+    if attackRunning then
+        WindUI:Notify({ Title = "✅ 自动攻击已开启", Content = "攻速: " .. Settings.swingSpeed, Duration = 3 })
+        attackCoroutine = task.spawn(function()
+            while attackRunning do
+                for _, w in ipairs(weaponConfigs) do
+                    local obj = w.get()
+                    if obj and swingEvent then
+                        pcall(function()
+                            swingEvent:FireServer(obj, w.id, w.dir)
+                        end)
                     end
                 end
-            end)
-        end
-        game.Players.LocalPlayer.Character.Animate.Disabled = true
-        local Char = game.Players.LocalPlayer.Character
-        local Hum = Char:FindFirstChildOfClass("Humanoid") or Char:FindFirstChildOfClass("AnimationController")
-        if Hum then
-            for i,v in next, Hum:GetPlayingAnimationTracks() do
-                v:AdjustSpeed(0)
+                task.wait(Settings.swingSpeed)
             end
-        end
-        speaker.Character.Humanoid:SetStateEnabled(Enum.HumanoidStateType.Climbing,false)
-        speaker.Character.Humanoid:SetStateEnabled(Enum.HumanoidStateType.FallingDown,false)
-        speaker.Character.Humanoid:SetStateEnabled(Enum.HumanoidStateType.Flying,false)
-        speaker.Character.Humanoid:SetStateEnabled(Enum.HumanoidStateType.Freefall,false)
-        speaker.Character.Humanoid:SetStateEnabled(Enum.HumanoidStateType.GettingUp,false)
-        speaker.Character.Humanoid:SetStateEnabled(Enum.HumanoidStateType.Jumping,false)
-        speaker.Character.Humanoid:SetStateEnabled(Enum.HumanoidStateType.Landed,false)
-        speaker.Character.Humanoid:SetStateEnabled(Enum.HumanoidStateType.Physics,false)
-        speaker.Character.Humanoid:SetStateEnabled(Enum.HumanoidStateType.PlatformStanding,false)
-        speaker.Character.Humanoid:SetStateEnabled(Enum.HumanoidStateType.Ragdoll,false)
-        speaker.Character.Humanoid:SetStateEnabled(Enum.HumanoidStateType.Running,false)
-        speaker.Character.Humanoid:SetStateEnabled(Enum.HumanoidStateType.RunningNoPhysics,false)
-        speaker.Character.Humanoid:SetStateEnabled(Enum.HumanoidStateType.Seated,false)
-        speaker.Character.Humanoid:SetStateEnabled(Enum.HumanoidStateType.StrafingNoPhysics,false)
-        speaker.Character.Humanoid:SetStateEnabled(Enum.HumanoidStateType.Swimming,false)
-        speaker.Character.Humanoid:ChangeState(Enum.HumanoidStateType.Swimming)
-        onof.Text = "stop"
-    end
-
-    if game:GetService("Players").LocalPlayer.Character:FindFirstChildOfClass("Humanoid").RigType == Enum.HumanoidRigType.R6 then
-        local plr = game.Players.LocalPlayer
-        local torso = plr.Character.Torso
-        local flying = true
-        local deb = true
-        local ctrl = {f = 0, b = 0, l = 0, r = 0}
-        local lastctrl = {f = 0, b = 0, l = 0, r = 0}
-        local maxspeed = 50
-        local speed = 0
-        local bg = Instance.new("BodyGyro", torso)
-        bg.P = 9e4
-        bg.maxTorque = Vector3.new(9e9, 9e9, 9e9)
-        bg.cframe = torso.CFrame
-        local bv = Instance.new("BodyVelocity", torso)
-        bv.velocity = Vector3.new(0,0.1,0)
-        bv.maxForce = Vector3.new(9e9, 9e9, 9e9)
-        if nowe == true then
-            plr.Character.Humanoid.PlatformStand = true
-        end
-        while nowe == true or game:GetService("Players").LocalPlayer.Character.Humanoid.Health == 0 do
-            game:GetService("RunService").RenderStepped:Wait()
-            if ctrl.l + ctrl.r ~= 0 or ctrl.f + ctrl.b ~= 0 then
-                speed = speed+.5+(speed/maxspeed)
-                if speed > maxspeed then
-                    speed = maxspeed
-                end
-            elseif not (ctrl.l + ctrl.r ~= 0 or ctrl.f + ctrl.b ~= 0) and speed ~= 0 then
-                speed = speed-1
-                if speed < 0 then
-                    speed = 0
-                end
-            end
-            if (ctrl.l + ctrl.r) ~= 0 or (ctrl.f + ctrl.b) ~= 0 then
-                bv.velocity = ((game.Workspace.CurrentCamera.CoordinateFrame.lookVector * (ctrl.f+ctrl.b)) + ((game.Workspace.CurrentCamera.CoordinateFrame * CFrame.new(ctrl.l+ctrl.r,(ctrl.f+ctrl.b)*.2,0).p) - game.Workspace.CurrentCamera.CoordinateFrame.p))*speed
-                lastctrl = {f = ctrl.f, b = ctrl.b, l = ctrl.l, r = ctrl.r}
-            elseif (ctrl.l + ctrl.r) == 0 and (ctrl.f + ctrl.b) == 0 and speed ~= 0 then
-                bv.velocity = ((game.Workspace.CurrentCamera.CoordinateFrame.lookVector * (lastctrl.f+lastctrl.b)) + ((game.Workspace.CurrentCamera.CoordinateFrame * CFrame.new(lastctrl.l+lastctrl.r,(lastctrl.f+lastctrl.b)*.2,0).p) - game.Workspace.CurrentCamera.CoordinateFrame.p))*speed
-            else
-                bv.velocity = Vector3.new(0,0,0)
-            end
-            bg.cframe = game.Workspace.CurrentCamera.CoordinateFrame * CFrame.Angles(-math.rad((ctrl.f+ctrl.b)*50*speed/maxspeed),0,0)
-        end
-        ctrl = {f = 0, b = 0, l = 0, r = 0}
-        lastctrl = {f = 0, b = 0, l = 0, r = 0}
-        speed = 0
-        bg:Destroy()
-        bv:Destroy()
-        plr.Character.Humanoid.PlatformStand = false
-        game.Players.LocalPlayer.Character.Animate.Disabled = false
-        tpwalking = false
+        end)
     else
-        local plr = game.Players.LocalPlayer
-        local UpperTorso = plr.Character.UpperTorso
-        local flying = true
-        local deb = true
-        local ctrl = {f = 0, b = 0, l = 0, r = 0}
-        local lastctrl = {f = 0, b = 0, l = 0, r = 0}
-        local maxspeed = 50
-        local speed = 0
-        local bg = Instance.new("BodyGyro", UpperTorso)
-        bg.P = 9e4
-        bg.maxTorque = Vector3.new(9e9, 9e9, 9e9)
-        bg.cframe = UpperTorso.CFrame
-        local bv = Instance.new("BodyVelocity", UpperTorso)
-        bv.velocity = Vector3.new(0,0.1,0)
-        bv.maxForce = Vector3.new(9e9, 9e9, 9e9)
-        if nowe == true then
-            plr.Character.Humanoid.PlatformStand = true
-        end
-        while nowe == true or game:GetService("Players").LocalPlayer.Character.Humanoid.Health == 0 do
-            wait()
-            if ctrl.l + ctrl.r ~= 0 or ctrl.f + ctrl.b ~= 0 then
-                speed = speed+.5+(speed/maxspeed)
-                if speed > maxspeed then
-                    speed = maxspeed
-                end
-            elseif not (ctrl.l + ctrl.r ~= 0 or ctrl.f + ctrl.b ~= 0) and speed ~= 0 then
-                speed = speed-1
-                if speed < 0 then
-                    speed = 0
-                end
-            end
-            if (ctrl.l + ctrl.r) ~= 0 or (ctrl.f + ctrl.b) ~= 0 then
-                bv.velocity = ((game.Workspace.CurrentCamera.CoordinateFrame.lookVector * (ctrl.f+ctrl.b)) + ((game.Workspace.CurrentCamera.CoordinateFrame * CFrame.new(ctrl.l+ctrl.r,(ctrl.f+ctrl.b)*.2,0).p) - game.Workspace.CurrentCamera.CoordinateFrame.p))*speed
-                lastctrl = {f = ctrl.f, b = ctrl.b, l = ctrl.l, r = ctrl.r}
-            elseif (ctrl.l + ctrl.r) == 0 and (ctrl.f + ctrl.b) == 0 and speed ~= 0 then
-                bv.velocity = ((game.Workspace.CurrentCamera.CoordinateFrame.lookVector * (lastctrl.f+lastctrl.b)) + ((game.Workspace.CurrentCamera.CoordinateFrame * CFrame.new(lastctrl.l+lastctrl.r,(lastctrl.f+lastctrl.b)*.2,0).p) - game.Workspace.CurrentCamera.CoordinateFrame.p))*speed
-            else
-                bv.velocity = Vector3.new(0,0,0)
-            end
-            bg.cframe = game.Workspace.CurrentCamera.CoordinateFrame * CFrame.Angles(-math.rad((ctrl.f+ctrl.b)*50*speed/maxspeed),0,0)
-        end
-        ctrl = {f = 0, b = 0, l = 0, r = 0}
-        lastctrl = {f = 0, b = 0, l = 0, r = 0}
-        speed = 0
-        bg:Destroy()
-        bv:Destroy()
-        plr.Character.Humanoid.PlatformStand = false
-        game.Players.LocalPlayer.Character.Animate.Disabled = false
-        tpwalking = false
+        if attackCoroutine then task.cancel(attackCoroutine) attackCoroutine = nil end
+        WindUI:Notify({ Title = "✅ 自动攻击已关闭", Duration = 2 })
     end
-end)
+end
 
-up.Activated:Connect(function()
-    local char = game.Players.LocalPlayer.Character
-    if char and char:FindFirstChild("HumanoidRootPart") then
-        char.HumanoidRootPart.CFrame = char.HumanoidRootPart.CFrame * CFrame.new(0,1,0)
+-- ============================================================
+--  自动喝药
+-- ============================================================
+local healRunning = false
+
+local function ToggleHeal()
+    healRunning = not healRunning
+    if healRunning then
+        WindUI:Notify({ Title = "✅ 自动喝药已开启", Content = "阈值: " .. Settings.healThreshold .. "%", Duration = 3 })
+    else
+        WindUI:Notify({ Title = "✅ 自动喝药已关闭", Duration = 2 })
     end
-end)
+end
 
-down.Activated:Connect(function()
-    local char = game.Players.LocalPlayer.Character
-    if char and char:FindFirstChild("HumanoidRootPart") then
-        char.HumanoidRootPart.CFrame = char.HumanoidRootPart.CFrame * CFrame.new(0,-1,0)
-    end
-end)
-
-plus.Activated:Connect(function()
-    speeds = speeds + 1
-    speedDisplay.Text = speeds
-end)
-
-mine.Activated:Connect(function()
-    if speeds > 1 then
-        speeds = speeds - 1
-        speedDisplay.Text = speeds
-    end
-end)
-
-closebutton.Activated:Connect(function()
-    main:Destroy()
-end)
-
-mini.Activated:Connect(function()
-    up.Visible = false
-    down.Visible = false
-    onof.Visible = false
-    plus.Visible = false
-    speedDisplay.Visible = false
-    mine.Visible = false
-    attackBtn.Visible = false
-    itemBtn.Visible = false
-    healBtn.Visible = false
-    mini.Visible = false
-    mini2.Visible = true
-    main.Frame.BackgroundTransparency = 1
-    closebutton.Position = UDim2.new(0, 0, -1, 57)
-end)
-
-mini2.Activated:Connect(function()
-    up.Visible = true
-    down.Visible = true
-    onof.Visible = true
-    plus.Visible = true
-    speedDisplay.Visible = true
-    mine.Visible = true
-    attackBtn.Visible = true
-    itemBtn.Visible = true
-    healBtn.Visible = true
-    mini.Visible = true
-    mini2.Visible = false
-    main.Frame.BackgroundTransparency = 0 
-    closebutton.Position = UDim2.new(0, 0, -1, 27)
-end)
-
-game:GetService("Players").LocalPlayer.CharacterAdded:Connect(function(char)
-    wait(0.7)
-    game.Players.LocalPlayer.Character.Humanoid.PlatformStand = false
-    game.Players.LocalPlayer.Character.Animate.Disabled = false
-end)
-
-local swingRunning = false
-local swingCoroutine = nil
-
-attackBtn.Activated:Connect(function()
-    if swingRunning then
-        swingRunning = false
-        attackBtn.Text = "⚔️"
-        attackBtn.BackgroundColor3 = Color3.fromRGB(200, 100, 200)
-        return
-    end
-    if not swingEvent then
-        return
-    end
-    swingRunning = true
-    attackBtn.Text = "⏹"
-    attackBtn.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
-    swingCoroutine = coroutine.create(function()
-        while swingRunning do
-            for _, w in ipairs(weaponConfigs) do
-                local obj = w.get()
-                if obj then
-                    pcall(function()
-                        swingEvent:FireServer(obj, w.id, w.dir)
-                    end)
+RunService.Heartbeat:Connect(function()
+    if not healRunning then return end
+    if not useEvent then return end
+    local char = LocalPlayer.Character
+    if not char then return end
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    if not hum then return end
+    local hp = hum.Health
+    local maxHp = hum.MaxHealth
+    if maxHp <= 0 then return end
+    if (hp / maxHp) * 100 < Settings.healThreshold and hp > 0 then
+        local now = os.clock()
+        if now - lastHealTime >= healCooldown then
+            local idToName = {}
+            for _, obj in ipairs(ReplicatedStorage:GetDescendants()) do
+                if obj:IsA("NumberValue") or obj:IsA("IntValue") or obj:IsA("StringValue") then
+                    local name = obj.Name
+                    local val = obj.Value
+                    local id = type(val) == "number" and val or tonumber(val)
+                    if id and id >= 0 and id <= 10000 then
+                        idToName[id] = name
+                    end
                 end
             end
-            task.wait(swingSpeed)
+            local snakeId = nil
+            for id, name in pairs(idToName) do
+                if name:find("Snake Oil") or name:find("蛇油") then
+                    snakeId = id
+                    break
+                end
+            end
+            if snakeId then
+                pcall(function()
+                    useEvent:FireServer(snakeId)
+                    lastHealTime = now
+                end)
+            end
         end
-    end)
-    coroutine.resume(swingCoroutine)
+    end
 end)
 
 -- ============================================================
---  ⚠️ 刷物品（唯一修改的部分）
---  原始：for id = itemStart to itemMax do storeEvent:FireServer(id) end
---  现在：先扫描建立 ID→名称 映射，匹配目标名称才刷
+--  WindUI 菜单
 -- ============================================================
+local Window = WindUI:CreateWindow({
+    Title = "DFN脚本",
+    Folder = "DFN",
+    Icon = "solar:crosshair-bold-duotone",
+    NewElements = true,
+    HideSearchBar = false,
+    OpenButton = {
+        Title = "DFN脚本",
+        Enabled = true,
+        Draggable = true,
+        OnlyMobile = true,
+        Scale = 0.7,
+    },
+    Topbar = {
+        Height = 44,
+        ButtonsType = "Mac",
+    },
+})
 
--- 要刷的物品名称（用游戏里的英文名）
-local targetNames = {"Gold Bar", "Coal", "Bond"}
+Window:Tag({
+    Title = "v3.0",
+    Icon = "smartphone",
+    Color = Color3.fromHex("#1c1c1c"),
+    Border = true,
+})
 
-local itemRunning = false
-local itemCoroutine = nil
-local itemCurrent = 0
-local itemMax = 0
-local itemStart = 0
-local itemTotal = 0
-local itemMode = 0
+-- ============================================================
+--  自瞄标签页
+-- ============================================================
+local AimbotTab = Window:Tab({ Title = "自瞄", Icon = "solar:target-bold" })
 
-itemBtn.Activated:Connect(function()
-    if itemRunning then
-        itemRunning = false
-        itemBtn.Text = "📦"
-        itemBtn.BackgroundColor3 = Color3.fromRGB(100, 150, 200)
-        return
-    end
-    if not storeEvent then
-        return
-    end
-    if itemMode == 0 then
-        itemMode = 1
-        itemStart = 800
-        itemMax = 3000
-        itemBtn.Text = "精"
-        itemBtn.BackgroundColor3 = Color3.fromRGB(200, 150, 100)
-    elseif itemMode == 1 then
-        itemMode = 2
-        itemStart = 0
-        itemMax = 5000
-        itemBtn.Text = "普"
-        itemBtn.BackgroundColor3 = Color3.fromRGB(100, 150, 200)
-    else
-        itemMode = 1
-        itemStart = 800
-        itemMax = 3000
-        itemBtn.Text = "精"
-        itemBtn.BackgroundColor3 = Color3.fromRGB(200, 150, 100)
-    end
+AimbotTab:Toggle({
+    Title = "NPC自瞄",
+    Value = false,
+    Callback = function(v)
+        Settings.aimbot = v
+        WindUI:Notify({ Title = v and "✅ 自瞄已开启" or "✅ 自瞄已关闭", Duration = 2 })
+    end,
+})
 
-    -- ===== 扫描建立 ID→名称 映射 =====
-    local idToName = {}
-    for _, obj in ipairs(game:GetService("ReplicatedStorage"):GetDescendants()) do
-        if obj:IsA("NumberValue") or obj:IsA("IntValue") or obj:IsA("StringValue") then
-            local name = obj.Name
-            local val = obj.Value
-            local id = type(val) == "number" and val or tonumber(val)
-            if id and id >= 0 and id <= 10000 then
-                idToName[id] = name
+AimbotTab:Dropdown({
+    Title = "瞄准部位",
+    Values = { "头部", "身体" },
+    Value = "头部",
+    Callback = function(option)
+        Settings.aimPart = option == "头部" and "Head" or "UpperTorso"
+    end,
+})
+
+AimbotTab:Toggle({
+    Title = "穿墙检测",
+    Value = false,
+    Callback = function(v)
+        Settings.wallCheck = v
+        WindUI:Notify({ Title = v and "✅ 穿墙检测已开启" or "✅ 穿墙检测已关闭", Duration = 2 })
+    end,
+})
+
+AimbotTab:Toggle({
+    Title = "预判",
+    Value = false,
+    Callback = function(v)
+        Settings.predict = v
+        WindUI:Notify({ Title = v and "✅ 预判已开启" or "✅ 预判已关闭", Duration = 2 })
+    end,
+})
+
+AimbotTab:Toggle({
+    Title = "自动开火",
+    Value = false,
+    Callback = function(v)
+        Settings.autoFire = v
+        WindUI:Notify({ Title = v and "✅ 自动开火已开启" or "✅ 自动开火已关闭", Duration = 2 })
+    end,
+})
+
+AimbotTab:Toggle({
+    Title = "显示FOV圈",
+    Value = false,
+    Callback = function(v)
+        Settings.showFOV = v
+        WindUI:Notify({ Title = v and "✅ FOV圈已显示" or "✅ FOV圈已隐藏", Duration = 2 })
+    end,
+})
+
+AimbotTab:Slider({
+    Title = "FOV大小",
+    Step = 1,
+    Value = { Min = 20, Max = 300, Default = 80 },
+    Callback = function(v) Settings.fov = v end,
+})
+
+AimbotTab:Slider({
+    Title = "最大距离",
+    Step = 1,
+    Value = { Min = 50, Max = 800, Default = 300 },
+    Callback = function(v) Settings.maxDist = v end,
+})
+
+-- ============================================================
+--  视觉标签页
+-- ============================================================
+local VisualTab = Window:Tab({ Title = "视觉", Icon = "solar:eye-bold" })
+
+VisualTab:Toggle({
+    Title = "夜视",
+    Value = false,
+    Callback = function(v)
+        Settings.nightVision = v
+        WindUI:Notify({ Title = v and "✅ 夜视已开启" or "✅ 夜视已关闭", Duration = 2 })
+    end,
+})
+
+VisualTab:Toggle({
+    Title = "NPC透视",
+    Value = false,
+    Callback = function(v)
+        Settings.esp = v
+        WindUI:Notify({ Title = v and "✅ 透视已开启" or "✅ 透视已关闭", Duration = 2 })
+    end,
+})
+
+VisualTab:Toggle({
+    Title = "NPC高亮",
+    Value = false,
+    Callback = function(v)
+        Settings.npcHighlight = v
+        WindUI:Notify({ Title = v and "✅ 高亮已开启" or "✅ 高亮已关闭", Duration = 2 })
+    end,
+})
+
+VisualTab:Toggle({
+    Title = "射线透视",
+    Value = false,
+    Callback = function(v)
+        Settings.rayLine = v
+        WindUI:Notify({ Title = v and "✅ 射线已开启" or "✅ 射线已关闭", Duration = 2 })
+    end,
+})
+
+VisualTab:Toggle({
+    Title = "显示名字+血量",
+    Value = true,
+    Callback = function(v)
+        Settings.espName = v
+        WindUI:Notify({ Title = v and "✅ 名字+血量已显示" or "✅ 名字+血量已隐藏", Duration = 2 })
+    end,
+})
+
+VisualTab:Toggle({
+    Title = "显示距离",
+    Value = true,
+    Callback = function(v)
+        Settings.espDistance = v
+        WindUI:Notify({ Title = v and "✅ 距离已显示" or "✅ 距离已隐藏", Duration = 2 })
+    end,
+})
+
+-- ============================================================
+--  武器标签页
+-- ============================================================
+local WeaponTab = Window:Tab({ Title = "武器", Icon = "solar:gun-bold" })
+
+WeaponTab:Toggle({
+    Title = "子弹追踪",
+    Value = false,
+    Callback = function(v)
+        Settings.bulletTrack = v
+        WindUI:Notify({ Title = v and "✅ 子弹追踪已开启" or "✅ 子弹追踪已关闭", Duration = 2 })
+    end,
+})
+
+WeaponTab:Slider({
+    Title = "子弹力度",
+    Step = 1,
+    Value = { Min = 50, Max = 300, Default = 150 },
+    Callback = function(v) Settings.bulletSpeed = v end,
+})
+
+WeaponTab:Toggle({
+    Title = "自动攻击",
+    Value = false,
+    Callback = function(v)
+        ToggleAttack()
+    end,
+})
+
+WeaponTab:Slider({
+    Title = "攻击速度",
+    Step = 0.001,
+    Value = { Min = 0.001, Max = 0.1, Default = 0.02 },
+    Callback = function(v)
+        Settings.swingSpeed = v
+        if attackRunning then
+            WindUI:Notify({ Title = "✅ 攻速已更新", Content = "当前: " .. v, Duration = 2 })
+        end
+    end,
+})
+
+-- ============================================================
+--  物品标签页
+-- ============================================================
+local ItemTab = Window:Tab({ Title = "物品", Icon = "solar:box-bold" })
+
+-- ===== 名称匹配刷（核心功能） =====
+ItemTab:Button({
+    Title = "🎯 名称匹配刷",
+    Callback = function()
+        if not storeEvent then
+            WindUI:Notify({ Title = "❌ Store事件不存在", Duration = 3 })
+            return
+        end
+
+        local targetNames = {"Gold Bar", "Coal", "Bond"}
+
+        -- 建立 ID→名称 映射
+        local idToName = {}
+        for _, obj in ipairs(ReplicatedStorage:GetDescendants()) do
+            if obj:IsA("NumberValue") or obj:IsA("IntValue") or obj:IsA("StringValue") then
+                local name = obj.Name
+                local val = obj.Value
+                local id = type(val) == "number" and val or tonumber(val)
+                if id and id >= 0 and id <= 10000 then
+                    idToName[id] = name
+                end
             end
         end
-    end
 
-    itemCurrent = itemStart
-    itemTotal = itemMax - itemStart + 1
-    itemRunning = true
-
-    itemCoroutine = coroutine.create(function()
         local count = 0
-        while itemRunning and itemCurrent <= itemMax do
-            local name = idToName[itemCurrent]
-            local shouldSpawn = false
+        for id = 0, 10000 do
+            local name = idToName[id]
             if name then
                 for _, target in ipairs(targetNames) do
                     if name:find(target) then
-                        shouldSpawn = true
+                        pcall(function()
+                            storeEvent:FireServer(id)
+                            storeEvent:FireServer(id)
+                        end)
+                        count = count + 1
                         break
                     end
                 end
             end
-            if shouldSpawn then
-                pcall(function()
-                    storeEvent:FireServer(itemCurrent)
-                    storeEvent:FireServer(itemCurrent)
-                    count = count + 1
-                end)
-            end
-            itemCurrent = itemCurrent + 1
             task.wait(0.01)
         end
 
-        if itemRunning then
-            itemRunning = false
-            itemBtn.Text = "📦"
-            itemBtn.BackgroundColor3 = Color3.fromRGB(100, 150, 200)
-            itemMode = 0
-            print("✅ 名称匹配刷完成，共刷 " .. count .. " 件物品")
+        WindUI:Notify({
+            Title = "✅ 刷取完成",
+            Content = "共刷 " .. count .. " 件",
+            Duration = 4,
+        })
+    end,
+})
+
+ItemTab:Button({
+    Title = "🔍 扫描物品",
+    Callback = function()
+        local idToName = {}
+        for _, obj in ipairs(ReplicatedStorage:GetDescendants()) do
+            if obj:IsA("NumberValue") or obj:IsA("IntValue") or obj:IsA("StringValue") then
+                local name = obj.Name
+                local val = obj.Value
+                local id = type(val) == "number" and val or tonumber(val)
+                if id and id >= 0 and id <= 10000 then
+                    idToName[id] = name
+                end
+            end
         end
-    end)
-    coroutine.resume(itemCoroutine)
+        local count = 0
+        for id, name in pairs(idToName) do
+            count = count + 1
+            print(id .. " -> " .. name)
+        end
+        WindUI:Notify({ Title = "✅ 扫描完成", Content = "共 " .. count .. " 个物品", Duration = 4 })
+    end,
+})
+
+-- ============================================================
+--  设置标签页
+-- ============================================================
+local SettingsTab = Window:Tab({ Title = "设置", Icon = "solar:settings-bold" })
+
+SettingsTab:Toggle({
+    Title = "飞行模式",
+    Value = false,
+    Callback = function(v)
+        ToggleFly()
+    end,
+})
+
+SettingsTab:Toggle({
+    Title = "自动喝药",
+    Value = false,
+    Callback = function(v)
+        ToggleHeal()
+    end,
+})
+
+SettingsTab:Slider({
+    Title = "喝药阈值 (%)",
+    Step = 1,
+    Value = { Min = 10, Max = 90, Default = 50 },
+    Callback = function(v)
+        Settings.healThreshold = v
+        if healRunning then
+            WindUI:Notify({ Title = "✅ 阈值已更新", Content = "血量低于 " .. v .. "% 自动喝药", Duration = 3 })
+        end
+    end,
+})
+
+-- ============================================================
+--  触摸控制
+-- ============================================================
+UserInputService.TouchStarted:Connect(function()
+    touchCount = touchCount + 1
 end)
 
-local healRunning = false
-local lastHealTime = 0
-local healCooldown = 2
+UserInputService.TouchEnded:Connect(function()
+    if touchCount > 0 then touchCount = touchCount - 1 end
+end)
 
-local function GetNil(Name, DebugId)
-    for _, Object in getnilinstances() do
-        if Object.Name == Name and Object:GetDebugId() == DebugId then
-            return Object
-        end
-    end
+-- ============================================================
+--  启动提示
+-- ============================================================
+local function PlayStartSound()
+    local sound = Instance.new("Sound")
+    sound.SoundId = "rbxassetid://9120263686"
+    sound.Volume = 1
+    sound.Parent = SoundService
+    sound:Play()
+    Debris:AddItem(sound, 2)
 end
 
-local useEvent = GetNil("Use", "1_325816")
-local snakeOil = GetNil("Snake Oil", "1_325803")
+PlayStartSound()
 
-healBtn.Activated:Connect(function()
-    healRunning = not healRunning
-    if healRunning then
-        healBtn.BackgroundColor3 = Color3.fromRGB(0, 200, 100)
-    else
-        healBtn.BackgroundColor3 = Color3.fromRGB(0, 150, 100)
-    end
-end)
+WindUI:Notify({
+    Title = "✅ DFN脚本已加载",
+    Content = "点击菜单按钮开始使用",
+    Icon = "solar:check-circle-bold",
+    Duration = 4,
+})
 
-RunService.Heartbeat:Connect(function()
-    if not healRunning then return end
-    if not useEvent or not snakeOil then return end
-    local char = player.Character
-    if not char then return end
-    local humanoid = char:FindFirstChild("Humanoid")
-    if not humanoid then return end
-    local health = humanoid.Health
-    local maxHealth = humanoid.MaxHealth
-    local percent = (health / maxHealth) * 100
-    if percent < healThreshold and health > 0 then
-        local now = os.clock()
-        if now - lastHealTime >= healCooldown then
-            pcall(function()
-                useEvent:FireServer(snakeOil)
-                lastHealTime = now
-            end)
-        end
-    end
-end)
-
-print("✅ 骷髅脚本已加载（名称匹配刷已启用）")
+print("✅ DFN脚本已启动")
