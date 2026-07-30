@@ -1,9 +1,8 @@
 -- ============================================================
 --  DFN脚本 - 最终完整版
---  刷物品：扫描ID 0~10000，按名称匹配，直接Event:FireServer(id)
---  飞行：原始骷髅脚本逻辑
---  自动攻击：原始骷髅脚本逻辑 + 攻速调节
---  自瞄 · 透视 · 夜视 · 子弹追踪 · 射线
+--  功能：自瞄 · 透视 · 夜视 · 子弹追踪 · 飞行 · 自动攻击 · 自动喝药 · 刷物品
+--  刷物品模式一：随机刷 0~5000
+--  刷物品模式二：名称匹配刷 0~10000（匹配 Gold Bar / Coal / Bond 等）
 -- ============================================================
 
 local RunService = game:GetService("RunService")
@@ -20,7 +19,31 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 -- ============================================================
 --  加载 WindUI
 -- ============================================================
-local WindUI = loadstring(game:HttpGet("https://raw.githubusercontent.com/Footagesus/WindUI/main/dist/main.lua"))()
+local WindUI
+local function LoadWindUI()
+    local success, result = pcall(function()
+        return loadstring(game:HttpGet("https://raw.githubusercontent.com/Footagesus/WindUI/main/dist/main.lua"))()
+    end)
+    if success and type(result) == "table" then
+        WindUI = result
+        return true
+    end
+    return false
+end
+
+if not LoadWindUI() then
+    task.wait(2)
+    if not LoadWindUI() then
+        error("WindUI 加载失败")
+    end
+end
+
+-- ============================================================
+--  获取网络事件
+-- ============================================================
+local storeEvent = ReplicatedStorage.Shared.Universe.Network.RemoteEvent.Store
+local swingEvent = ReplicatedStorage.Shared.Universe.Network.RemoteEvent.SwingMelee
+local useEvent = ReplicatedStorage.Shared.Universe.Network.RemoteEvent.Use
 
 -- ============================================================
 --  中文映射
@@ -37,13 +60,6 @@ local function GetDisplayName(model)
     local eng = model.Name
     return NameTranslate[eng] or eng
 end
-
--- ============================================================
---  获取网络事件（原始路径）
--- ============================================================
-local storeEvent = ReplicatedStorage.Shared.Universe.Network.RemoteEvent.Store
-local swingEvent = ReplicatedStorage.Shared.Universe.Network.RemoteEvent.SwingMelee
-local useEvent = ReplicatedStorage.Shared.Universe.Network.RemoteEvent.Use
 
 -- ============================================================
 --  设置
@@ -78,7 +94,7 @@ local lastHealTime = 0
 local healCooldown = 2
 
 -- ============================================================
---  武器配置（原始骷髅脚本）
+--  武器配置
 -- ============================================================
 local weaponConfigs = {
     {get = function() return LocalPlayer.Backpack:FindFirstChild("Shovel") end, id = 1784980835.0023, dir = Vector3.new(-0.98141527175903, -0.17157469689846, -0.085943520069122)},
@@ -148,7 +164,7 @@ targetInfo.Visible = false
 local rayLines = {}
 
 -- ============================================================
---  自瞄硬锁头
+--  自瞄
 -- ============================================================
 local currentTarget = nil
 local aimLockTime = 0
@@ -275,7 +291,7 @@ local function TrackBullets()
 end
 
 -- ============================================================
---  透视（含独立射线）
+--  透视（含射线）
 -- ============================================================
 local espDrawings = {}
 
@@ -389,7 +405,6 @@ local function UpdateESP()
             data.highlight.FillColor = color
         end
 
-        -- 独立射线透视
         if Settings.rayLine then
             local line = Drawing.new("Line")
             line.Thickness = 1.5
@@ -475,65 +490,84 @@ RunService.RenderStepped:Connect(function()
 end)
 
 -- ============================================================
---  刷物品（原始骷髅脚本逻辑 + 0~10000扫描）
+--  刷物品（两种模式）
 -- ============================================================
 
--- 扫描 0~10000 范围内的所有物品
-local function ScanItems()
-    local items = {}
+local targetNames = {"Gold Bar", "Coal", "Bond"}
+
+-- 建立 ID→名称 映射
+local function GetIdToNameMap()
+    local map = {}
     for _, obj in ipairs(ReplicatedStorage:GetDescendants()) do
         if obj:IsA("NumberValue") or obj:IsA("IntValue") or obj:IsA("StringValue") then
             local name = obj.Name
             local val = obj.Value
             local id = type(val) == "number" and val or tonumber(val)
             if id and id >= 0 and id <= 10000 then
-                items[name] = id
+                map[id] = name
             end
         end
     end
-    return items
+    return map
 end
 
--- 按名称刷（从0~10000扫描结果中匹配）
-local function SpawnByName(itemName)
-    local items = ScanItems()
-    local id = items[itemName]
-    if not id then
-        for name, val in pairs(items) do
-            if name:find(itemName) then
-                id = val
-                itemName = name
-                break
-            end
-        end
-    end
-    if not id then
-        WindUI:Notify({ Title = "❌ 未找到物品", Content = "当前局没有 " .. itemName, Duration = 3 })
-        return
-    end
-    pcall(function()
-        storeEvent:FireServer(id)
-    end)
-    WindUI:Notify({ Title = "✅ 已刷 " .. itemName, Content = "ID: " .. id, Duration = 3 })
-end
-
--- 按 ID 范围刷
-local function SpawnRange(startId, endId)
+-- 模式一：随机刷 0~5000
+local function SpawnRandom()
     if not storeEvent then
-        WindUI:Notify({ Title = "❌ 错误", Content = "Store事件不存在", Duration = 3 })
+        WindUI:Notify({ Title = "❌ Store事件不存在", Duration = 3 })
         return
     end
-    for id = startId, endId do
+    for id = 0, 5000 do
         pcall(function()
+            storeEvent:FireServer(id)
             storeEvent:FireServer(id)
         end)
         task.wait(0.01)
     end
-    WindUI:Notify({ Title = "✅ 刷取完成", Content = "已刷 ID " .. startId .. " ~ " .. endId, Duration = 3 })
+    WindUI:Notify({ Title = "✅ 随机刷完成", Content = "已刷 0~5000", Duration = 3 })
+end
+
+-- 模式二：名称匹配刷 0~10000
+local function SpawnByName()
+    if not storeEvent then
+        WindUI:Notify({ Title = "❌ Store事件不存在", Duration = 3 })
+        return
+    end
+
+    local idToName = GetIdToNameMap()
+    local found = {}
+
+    for id = 0, 10000 do
+        local name = idToName[id]
+        if name then
+            for _, target in ipairs(targetNames) do
+                if name:find(target) then
+                    table.insert(found, {name = name, id = id})
+                    break
+                end
+            end
+        end
+    end
+
+    if #found == 0 then
+        WindUI:Notify({ Title = "❌ 未找到匹配物品", Duration = 3 })
+        return
+    end
+
+    for _, item in ipairs(found) do
+        pcall(function()
+            storeEvent:FireServer(item.id)
+            storeEvent:FireServer(item.id)
+        end)
+        WindUI:Notify({ Title = "✅ 已刷 " .. item.name, Content = "ID: " .. item.id, Duration = 2 })
+        task.wait(0.01)
+    end
+
+    WindUI:Notify({ Title = "✅ 名称匹配刷完成", Content = "共 " .. #found .. " 件", Duration = 3 })
 end
 
 -- ============================================================
---  飞行功能（原始骷髅脚本逻辑）
+--  飞行功能
 -- ============================================================
 local flyEnabled = false
 local flyBV = nil
@@ -601,7 +635,7 @@ local function ToggleFly()
 end
 
 -- ============================================================
---  自动攻击（原始骷髅脚本逻辑 + 攻速调节）
+--  自动攻击
 -- ============================================================
 local attackRunning = false
 local attackCoroutine = nil
@@ -656,8 +690,14 @@ RunService.Heartbeat:Connect(function()
     if (hp / maxHp) * 100 < Settings.healThreshold and hp > 0 then
         local now = os.clock()
         if now - lastHealTime >= healCooldown then
-            local items = ScanItems()
-            local snakeId = items["Snake Oil"] or items["蛇油"]
+            local idToName = GetIdToNameMap()
+            local snakeId = nil
+            for id, name in pairs(idToName) do
+                if name:find("Snake Oil") or name:find("蛇油") then
+                    snakeId = id
+                    break
+                end
+            end
             if snakeId then
                 pcall(function()
                     useEvent:FireServer(snakeId)
@@ -876,66 +916,31 @@ WeaponTab:Slider({
 local ItemTab = Window:Tab({ Title = "物品", Icon = "solar:box-bold" })
 
 ItemTab:Button({
-    Title = "🔍 扫描 0~10000",
+    Title = "🎲 随机刷（0~5000）",
     Callback = function()
-        local items = ScanItems()
-        local count = 0
-        for name, id in pairs(items) do
-            count = count + 1
-            print(name .. " -> " .. id)
-        end
-        WindUI:Notify({ Title = "✅ 扫描完成", Content = "共找到 " .. count .. " 个物品", Duration = 4 })
+        SpawnRandom()
     end,
 })
 
 ItemTab:Button({
-    Title = "📦 刷 ID 0~10000",
+    Title = "🎯 名称匹配刷（金条/煤/债券）",
     Callback = function()
-        SpawnRange(0, 10000)
+        SpawnByName()
     end,
 })
 
-ItemTab:Space()
-ItemTab:Section({ Title = "分类刷取" })
-
-local function CreateSpawnButton(itemName, label)
-    ItemTab:Button({
-        Title = label,
-        Callback = function()
-            SpawnByName(itemName)
-        end,
-    })
-end
-
-CreateSpawnButton("国库券", "💵 国库券")
-CreateSpawnButton("金条", "🪙 金条")
-CreateSpawnButton("银条", "🪙 银条")
-CreateSpawnButton("金酒杯", "🏆 金酒杯")
-CreateSpawnButton("银酒杯", "🏆 银酒杯")
-CreateSpawnButton("金盘子", "🍽️ 金盘子")
-CreateSpawnButton("银盘子", "🍽️ 银盘子")
-CreateSpawnButton("金画像", "🖼️ 金画像")
-CreateSpawnButton("银画像", "🖼️ 银画像")
-CreateSpawnButton("金雕像", "🗿 金雕像")
-CreateSpawnButton("银雕像", "🗿 银雕像")
-CreateSpawnButton("步枪", "🔫 步枪")
-CreateSpawnButton("海军手枪", "🔫 海军手枪")
-CreateSpawnButton("手枪", "🔫 手枪")
-CreateSpawnButton("散弹枪", "🔫 散弹枪")
-CreateSpawnButton("烟花枪", "🎆 烟花枪")
-CreateSpawnButton("吸血鬼刀", "🗡️ 吸血鬼刀")
-CreateSpawnButton("翡翠宝刀", "🗡️ 翡翠宝刀")
-CreateSpawnButton("步枪子弹", "📦 步枪子弹")
-CreateSpawnButton("散弹枪子弹", "📦 散弹枪子弹")
-CreateSpawnButton("中型子弹", "📦 中型子弹")
-CreateSpawnButton("重型子弹", "📦 重型子弹")
-CreateSpawnButton("轻型子弹", "📦 轻型子弹")
-CreateSpawnButton("烟花枪子弹", "📦 烟花枪子弹")
-CreateSpawnButton("蛇油", "🧪 蛇油")
-CreateSpawnButton("绷带", "🩹 绷带")
-CreateSpawnButton("煤", "🪨 煤")
-CreateSpawnButton("奇怪的面具", "🎭 奇怪的面具")
-CreateSpawnButton("危险巴士", "🚌 危险巴士")
+ItemTab:Button({
+    Title = "🔍 扫描物品",
+    Callback = function()
+        local idToName = GetIdToNameMap()
+        local count = 0
+        for id, name in pairs(idToName) do
+            count = count + 1
+            print(id .. " -> " .. name)
+        end
+        WindUI:Notify({ Title = "✅ 扫描完成", Content = "共 " .. count .. " 个物品", Duration = 4 })
+    end,
+})
 
 -- ============================================================
 --  设置标签页
