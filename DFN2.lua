@@ -1,7 +1,7 @@
 -- ============================================================
---  DFN脚本 - 完整版（WindUI）
---  刷物品：名称匹配刷（Gold Bar / Coal / Bond）
---  功能：自瞄 · 透视 · 夜视 · 子弹追踪 · 飞行 · 自动攻击 · 自动喝药
+--  DFN脚本 - 完整最终版
+--  功能：自瞄 · 透视 · 夜视 · 子弹追踪 · 飞行 · 自动攻击 · 自动喝蛇油 · 指定物品极速刷（带停止）
+--  刷物品：下拉菜单选物品 → 极速循环刷 → 点击停止按钮秒停
 -- ============================================================
 
 local RunService = game:GetService("RunService")
@@ -23,25 +23,27 @@ local WindUI = loadstring(game:HttpGet("https://raw.githubusercontent.com/Footag
 -- ============================================================
 --  获取网络事件
 -- ============================================================
-local storeEvent = ReplicatedStorage.Shared.Universe.Network.RemoteEvent.Store
-local swingEvent = ReplicatedStorage.Shared.Universe.Network.RemoteEvent.SwingMelee
-local useEvent = ReplicatedStorage.Shared.Universe.Network.RemoteEvent.Use
-
--- ============================================================
---  中文映射
--- ============================================================
-local NameTranslate = {
-    ["Zombie"] = "僵尸",
-    ["Skeleton"] = "骷髅",
-    ["Bandit"] = "强盗",
-    ["Guard"] = "守卫",
-    ["Boss"] = "BOSS",
-    ["NewspaperBoy"] = "报童",
-}
-local function GetDisplayName(model)
-    local eng = model.Name
-    return NameTranslate[eng] or eng
-end
+local storeEvent, swingEvent, useEvent
+pcall(function()
+    local r = ReplicatedStorage
+    if r then
+        local sh = r:FindFirstChild("Shared")
+        if sh then
+            local u = sh:FindFirstChild("Universe")
+            if u then
+                local n = u:FindFirstChild("Network")
+                if n then
+                    local re = n:FindFirstChild("RemoteEvent")
+                    if re then
+                        storeEvent = re:FindFirstChild("Store")
+                        swingEvent = re:FindFirstChild("SwingMelee")
+                        useEvent = re:FindFirstChild("Use")
+                    end
+                end
+            end
+        end
+    end
+end)
 
 -- ============================================================
 --  设置
@@ -74,6 +76,22 @@ local Settings = {
 local touchCount = 0
 local lastHealTime = 0
 local healCooldown = 2
+
+-- ============================================================
+--  中文映射
+-- ============================================================
+local NameTranslate = {
+    ["Zombie"] = "僵尸",
+    ["Skeleton"] = "骷髅",
+    ["Bandit"] = "强盗",
+    ["Guard"] = "守卫",
+    ["Boss"] = "BOSS",
+    ["NewspaperBoy"] = "报童",
+}
+local function GetDisplayName(model)
+    local eng = model.Name
+    return NameTranslate[eng] or eng
+end
 
 -- ============================================================
 --  武器配置
@@ -561,48 +579,49 @@ local function ToggleAttack()
 end
 
 -- ============================================================
---  自动喝药
+--  自动喝蛇油
 -- ============================================================
 local healRunning = false
 
 local function ToggleHeal()
     healRunning = not healRunning
     if healRunning then
-        WindUI:Notify({ Title = "✅ 自动喝药已开启", Content = "阈值: " .. Settings.healThreshold .. "%", Duration = 3 })
+        WindUI:Notify({
+            Title = "✅ 自动喝蛇油已开启",
+            Content = "阈值: " .. Settings.healThreshold .. "%",
+            Duration = 3,
+        })
     else
-        WindUI:Notify({ Title = "✅ 自动喝药已关闭", Duration = 2 })
+        WindUI:Notify({ Title = "✅ 自动喝蛇油已关闭", Duration = 2 })
     end
 end
 
 RunService.Heartbeat:Connect(function()
     if not healRunning then return end
     if not useEvent then return end
+
     local char = LocalPlayer.Character
     if not char then return end
     local hum = char:FindFirstChildOfClass("Humanoid")
     if not hum then return end
+
     local hp = hum.Health
     local maxHp = hum.MaxHealth
     if maxHp <= 0 then return end
+
     if (hp / maxHp) * 100 < Settings.healThreshold and hp > 0 then
         local now = os.clock()
         if now - lastHealTime >= healCooldown then
-            local idToName = {}
+            -- 动态查找蛇油ID
+            local snakeId = nil
             for _, obj in ipairs(ReplicatedStorage:GetDescendants()) do
                 if obj:IsA("NumberValue") or obj:IsA("IntValue") or obj:IsA("StringValue") then
                     local name = obj.Name
-                    local val = obj.Value
-                    local id = type(val) == "number" and val or tonumber(val)
-                    if id and id >= 0 and id <= 10000 then
-                        idToName[id] = name
+                    if name:find("Snake Oil") or name:find("蛇油") then
+                        local val = obj.Value
+                        snakeId = type(val) == "number" and val or tonumber(val)
+                        break
                     end
-                end
-            end
-            local snakeId = nil
-            for id, name in pairs(idToName) do
-                if name:find("Snake Oil") or name:find("蛇油") then
-                    snakeId = id
-                    break
                 end
             end
             if snakeId then
@@ -818,80 +837,128 @@ WeaponTab:Slider({
 })
 
 -- ============================================================
---  物品标签页
+--  物品标签页（指定物品极速刷 + 停止）
 -- ============================================================
 local ItemTab = Window:Tab({ Title = "物品", Icon = "solar:box-bold" })
 
--- ===== 名称匹配刷（核心功能） =====
+-- 存储刷取状态
+local spawnRunning = false
+local spawnCoroutine = nil
+local selectedItem = nil
+
+-- 获取所有物品名称列表（用于下拉菜单）
+local function GetItemNameList()
+    local names = {}
+    for _, obj in ipairs(ReplicatedStorage:GetDescendants()) do
+        if obj:IsA("NumberValue") or obj:IsA("IntValue") or obj:IsA("StringValue") then
+            local name = obj.Name
+            local val = obj.Value
+            local id = type(val) == "number" and val or tonumber(val)
+            if id and id >= 0 and id <= 10000 then
+                table.insert(names, name)
+            end
+        end
+    end
+    return names
+end
+
+-- 下拉菜单：选择要刷的物品
+ItemTab:Dropdown({
+    Title = "选择要刷的物品",
+    Values = GetItemNameList(),
+    Value = nil,
+    Callback = function(value)
+        selectedItem = value
+        WindUI:Notify({ Title = "✅ 已选择", Content = "当前选中的物品: " .. (selectedItem or "无"), Duration = 2 })
+    end,
+})
+
+-- 按钮：刷选中的物品（极速循环）
 ItemTab:Button({
-    Title = "🎯 名称匹配刷",
+    Title = "⚡ 开始刷取（极速）",
     Callback = function()
+        if not selectedItem then
+            WindUI:Notify({ Title = "⚠️ 请先选择物品", Duration = 2 })
+            return
+        end
         if not storeEvent then
             WindUI:Notify({ Title = "❌ Store事件不存在", Duration = 3 })
             return
         end
+        if spawnRunning then
+            WindUI:Notify({ Title = "⚠️ 正在刷取中，请先停止", Duration = 2 })
+            return
+        end
 
-        local targetNames = {"Gold Bar", "Coal", "Bond"}
-
-        -- 建立 ID→名称 映射
-        local idToName = {}
+        -- 获取选中物品的 ID
+        local targetId = nil
+        local foundName = nil
         for _, obj in ipairs(ReplicatedStorage:GetDescendants()) do
             if obj:IsA("NumberValue") or obj:IsA("IntValue") or obj:IsA("StringValue") then
                 local name = obj.Name
-                local val = obj.Value
-                local id = type(val) == "number" and val or tonumber(val)
-                if id and id >= 0 and id <= 10000 then
-                    idToName[id] = name
+                if name == selectedItem then
+                    local val = obj.Value
+                    targetId = type(val) == "number" and val or tonumber(val)
+                    foundName = name
+                    break
                 end
             end
         end
 
+        if not targetId then
+            WindUI:Notify({ Title = "⚠️ 未找到物品ID", Duration = 2 })
+            return
+        end
+
+        spawnRunning = true
         local count = 0
-        for id = 0, 10000 do
-            local name = idToName[id]
-            if name then
-                for _, target in ipairs(targetNames) do
-                    if name:find(target) then
-                        pcall(function()
-                            storeEvent:FireServer(id)
-                            storeEvent:FireServer(id)
-                        end)
-                        count = count + 1
-                        break
-                    end
+        WindUI:Notify({
+            Title = "🔄 开始刷取",
+            Content = foundName .. " (ID: " .. targetId .. ")",
+            Duration = 2,
+        })
+
+        spawnCoroutine = task.spawn(function()
+            while spawnRunning do
+                pcall(function()
+                    storeEvent:FireServer(targetId)
+                    storeEvent:FireServer(targetId)
+                end)
+                count = count + 2
+                -- 无延时，极速刷
+            end
+        end)
+
+        -- 每3秒显示一次已刷数量
+        task.spawn(function()
+            while spawnRunning do
+                task.wait(3)
+                if spawnRunning then
+                    WindUI:Notify({
+                        Title = "📊 刷取中",
+                        Content = "已刷 " .. count .. " 件",
+                        Duration = 2,
+                    })
                 end
             end
-            task.wait(0.01)
-        end
-
-        WindUI:Notify({
-            Title = "✅ 刷取完成",
-            Content = "共刷 " .. count .. " 件",
-            Duration = 4,
-        })
+        end)
     end,
 })
 
+-- 按钮：停止刷取
 ItemTab:Button({
-    Title = "🔍 扫描物品",
+    Title = "⏹ 停止刷取",
     Callback = function()
-        local idToName = {}
-        for _, obj in ipairs(ReplicatedStorage:GetDescendants()) do
-            if obj:IsA("NumberValue") or obj:IsA("IntValue") or obj:IsA("StringValue") then
-                local name = obj.Name
-                local val = obj.Value
-                local id = type(val) == "number" and val or tonumber(val)
-                if id and id >= 0 and id <= 10000 then
-                    idToName[id] = name
-                end
-            end
+        if not spawnRunning then
+            WindUI:Notify({ Title = "⚠️ 当前没有正在刷取", Duration = 2 })
+            return
         end
-        local count = 0
-        for id, name in pairs(idToName) do
-            count = count + 1
-            print(id .. " -> " .. name)
+        spawnRunning = false
+        if spawnCoroutine then
+            task.cancel(spawnCoroutine)
+            spawnCoroutine = nil
         end
-        WindUI:Notify({ Title = "✅ 扫描完成", Content = "共 " .. count .. " 个物品", Duration = 4 })
+        WindUI:Notify({ Title = "✅ 已停止刷取", Duration = 2 })
     end,
 })
 
@@ -909,7 +976,7 @@ SettingsTab:Toggle({
 })
 
 SettingsTab:Toggle({
-    Title = "自动喝药",
+    Title = "自动喝蛇油",
     Value = false,
     Callback = function(v)
         ToggleHeal()
@@ -917,13 +984,17 @@ SettingsTab:Toggle({
 })
 
 SettingsTab:Slider({
-    Title = "喝药阈值 (%)",
+    Title = "喝蛇油阈值 (%)",
     Step = 1,
     Value = { Min = 10, Max = 90, Default = 50 },
     Callback = function(v)
         Settings.healThreshold = v
         if healRunning then
-            WindUI:Notify({ Title = "✅ 阈值已更新", Content = "血量低于 " .. v .. "% 自动喝药", Duration = 3 })
+            WindUI:Notify({
+                Title = "✅ 阈值已更新",
+                Content = "血量低于 " .. v .. "% 自动喝蛇油",
+                Duration = 3,
+            })
         end
     end,
 })
@@ -954,8 +1025,8 @@ end
 PlayStartSound()
 
 WindUI:Notify({
-    Title = "✅ DFN脚本已加载",
-    Content = "点击菜单按钮开始使用",
+    Title = "✅ 开启成功",
+    Content = "DFN脚本已加载，点击菜单使用",
     Icon = "solar:check-circle-bold",
     Duration = 4,
 })
