@@ -1,9 +1,9 @@
 -- ============================================================
 --  DFN脚本 - 最终完整版
---  修复：飞行可开关/保留跳跃/手机触摸控制
---  修复：刷物品动态扫描真实ID/刷后验证/显示数量
---  修复：射线独立显示/不需要自瞄
---  功能：自瞄 · 透视 · 夜视 · 子弹追踪 · 飞行 · 自动攻击 · 刷物品 · 自动喝药
+--  刷物品：扫描ID 0~10000，按名称匹配，直接Event:FireServer(id)
+--  飞行：原始骷髅脚本逻辑
+--  自动攻击：原始骷髅脚本逻辑 + 攻速调节
+--  自瞄 · 透视 · 夜视 · 子弹追踪 · 射线
 -- ============================================================
 
 local RunService = game:GetService("RunService")
@@ -39,37 +39,11 @@ local function GetDisplayName(model)
 end
 
 -- ============================================================
---  获取网络事件
+--  获取网络事件（原始路径）
 -- ============================================================
-local function GetNetworkEvents()
-    local events = {}
-    pcall(function()
-        local r = ReplicatedStorage
-        if r then
-            local sh = r:FindFirstChild("Shared")
-            if sh then
-                local u = sh:FindFirstChild("Universe")
-                if u then
-                    local n = u:FindFirstChild("Network")
-                    if n then
-                        local re = n:FindFirstChild("RemoteEvent")
-                        if re then
-                            events.swingEvent = re:FindFirstChild("SwingMelee")
-                            events.storeEvent = re:FindFirstChild("Store")
-                            events.useEvent = re:FindFirstChild("Use")
-                        end
-                    end
-                end
-            end
-        end
-    end)
-    return events
-end
-
-local Events = GetNetworkEvents()
-local swingEvent = Events.swingEvent
-local storeEvent = Events.storeEvent
-local useEvent = Events.useEvent
+local storeEvent = ReplicatedStorage.Shared.Universe.Network.RemoteEvent.Store
+local swingEvent = ReplicatedStorage.Shared.Universe.Network.RemoteEvent.SwingMelee
+local useEvent = ReplicatedStorage.Shared.Universe.Network.RemoteEvent.Use
 
 -- ============================================================
 --  设置
@@ -104,7 +78,7 @@ local lastHealTime = 0
 local healCooldown = 2
 
 -- ============================================================
---  武器配置
+--  武器配置（原始骷髅脚本）
 -- ============================================================
 local weaponConfigs = {
     {get = function() return LocalPlayer.Backpack:FindFirstChild("Shovel") end, id = 1784980835.0023, dir = Vector3.new(-0.98141527175903, -0.17157469689846, -0.085943520069122)},
@@ -501,46 +475,28 @@ RunService.RenderStepped:Connect(function()
 end)
 
 -- ============================================================
---  动态扫描物品（真实ID）
+--  刷物品（原始骷髅脚本逻辑 + 0~10000扫描）
 -- ============================================================
-local function ScanRealItems()
+
+-- 扫描 0~10000 范围内的所有物品
+local function ScanItems()
     local items = {}
-    pcall(function()
-        for _, obj in ipairs(ReplicatedStorage:GetDescendants()) do
-            if obj:IsA("NumberValue") or obj:IsA("IntValue") then
-                local val = obj.Value
-                if type(val) == "number" and val > 0 then
-                    items[obj.Name] = val
-                end
+    for _, obj in ipairs(ReplicatedStorage:GetDescendants()) do
+        if obj:IsA("NumberValue") or obj:IsA("IntValue") or obj:IsA("StringValue") then
+            local name = obj.Name
+            local val = obj.Value
+            local id = type(val) == "number" and val or tonumber(val)
+            if id and id >= 0 and id <= 10000 then
+                items[name] = id
             end
         end
-    end)
-    pcall(function()
-        for _, obj in ipairs(Workspace:GetDescendants()) do
-            if obj:IsA("Tool") or obj:IsA("Model") then
-                local id = obj:FindFirstChild("ItemId") or obj:FindFirstChild("ID")
-                if id and (id:IsA("NumberValue") or id:IsA("IntValue")) then
-                    items[obj.Name] = id.Value
-                end
-            end
-        end
-    end)
-    pcall(function()
-        for _, obj in ipairs(LocalPlayer.Backpack:GetChildren()) do
-            local id = obj:FindFirstChild("ItemId") or obj:FindFirstChild("ID")
-            if id and (id:IsA("NumberValue") or id:IsA("IntValue")) then
-                items[obj.Name] = id.Value
-            end
-        end
-    end)
+    end
     return items
 end
 
--- ============================================================
---  刷取物品（动态ID + 验证）
--- ============================================================
-local function SpawnRealItem(itemName)
-    local items = ScanRealItems()
+-- 按名称刷（从0~10000扫描结果中匹配）
+local function SpawnByName(itemName)
+    local items = ScanItems()
     local id = items[itemName]
     if not id then
         for name, val in pairs(items) do
@@ -552,242 +508,124 @@ local function SpawnRealItem(itemName)
         end
     end
     if not id then
-        WindUI:Notify({ Title = "❌ 未找到物品", Content = "当前游戏内不存在: " .. itemName, Duration = 3 })
-        return false
+        WindUI:Notify({ Title = "❌ 未找到物品", Content = "当前局没有 " .. itemName, Duration = 3 })
+        return
     end
+    pcall(function()
+        storeEvent:FireServer(id)
+    end)
+    WindUI:Notify({ Title = "✅ 已刷 " .. itemName, Content = "ID: " .. id, Duration = 3 })
+end
+
+-- 按 ID 范围刷
+local function SpawnRange(startId, endId)
     if not storeEvent then
-        WindUI:Notify({ Title = "❌ 刷取失败", Content = "未找到Store事件", Duration = 3 })
-        return false
+        WindUI:Notify({ Title = "❌ 错误", Content = "Store事件不存在", Duration = 3 })
+        return
     end
-
-    local before = {}
-    for _, obj in ipairs(LocalPlayer.Backpack:GetChildren()) do before[obj] = true end
-
-    for i = 1, 2 do
-        pcall(function() storeEvent:FireServer(id) end)
+    for id = startId, endId do
+        pcall(function()
+            storeEvent:FireServer(id)
+        end)
         task.wait(0.01)
     end
-    task.wait(0.2)
-
-    local after = {}
-    local count = 0
-    for _, obj in ipairs(LocalPlayer.Backpack:GetChildren()) do
-        if not before[obj] then
-            count = count + 1
-        end
-    end
-
-    WindUI:Notify({
-        Title = count > 0 and "✅ 刷取成功" or "⚠️ 刷取可能失败",
-        Content = count > 0 and "物品: " .. itemName .. " (ID: " .. id .. ")" or "物品未进入背包",
-        Duration = 3,
-    })
-    return count > 0
-end
-
-local function SpawnRandomItem()
-    local items = ScanRealItems()
-    local nameList = {}
-    for name, _ in pairs(items) do table.insert(nameList, name) end
-    if #nameList == 0 then
-        WindUI:Notify({ Title = "❌ 扫描失败", Content = "当前游戏未扫描到任何物品", Duration = 3 })
-        return
-    end
-    SpawnRealItem(nameList[math.random(1, #nameList)])
+    WindUI:Notify({ Title = "✅ 刷取完成", Content = "已刷 ID " .. startId .. " ~ " .. endId, Duration = 3 })
 end
 
 -- ============================================================
---  刷取控制（带停止）
+--  飞行功能（原始骷髅脚本逻辑）
 -- ============================================================
-local spawningEnabled = false
-local spawnLoop = nil
-
-local function StartRandomSpawnLoop(count)
-    count = count or 999
-    if spawningEnabled then return end
-    spawningEnabled = true
-    WindUI:Notify({ Title = "🔄 开始循环刷取", Content = "点击「停止刷取」暂停", Duration = 3 })
-    spawnLoop = task.spawn(function()
-        local spawned = 0
-        while spawningEnabled and spawned < count do
-            local items = ScanRealItems()
-            local nameList = {}
-            for name, _ in pairs(items) do table.insert(nameList, name) end
-            if #nameList > 0 then
-                local name = nameList[math.random(1, #nameList)]
-                local id = items[name]
-                pcall(function()
-                    storeEvent:FireServer(id)
-                    storeEvent:FireServer(id)
-                end)
-                spawned = spawned + 1
-            end
-            task.wait(0.01)
-        end
-        if spawningEnabled then
-            WindUI:Notify({ Title = "✅ 刷取完成", Content = "已刷 " .. spawned .. " 件物品", Duration = 3 })
-        end
-        spawningEnabled = false
-    end)
-end
-
-local function StopSpawning()
-    if spawningEnabled then
-        spawningEnabled = false
-        if spawnLoop then task.cancel(spawnLoop) spawnLoop = nil end
-        WindUI:Notify({ Title = "⏹ 已停止刷取", Duration = 2 })
-    else
-        WindUI:Notify({ Title = "⚠️ 当前没有正在刷取", Duration = 2 })
-    end
-end
-
--- ============================================================
---  飞行功能（手机专用·可开关·保留跳跃）
--- ============================================================
-local flyBodyVelocity = nil
-local flyBodyGyro = nil
-local flying = false
-local flyDirection = Vector3.new(0, 0, 0)
-local flySpeed = 40
-local touchStart = nil
-local touchMove = nil
+local flyEnabled = false
+local flyBV = nil
 
 local function ToggleFly()
+    flyEnabled = not flyEnabled
     local char = LocalPlayer.Character
-    if not char then
-        WindUI:Notify({ Title = "⚠️ 请先进入游戏", Duration = 2 })
-        return
-    end
+    if not char then return end
     local hum = char:FindFirstChildOfClass("Humanoid")
-    if not hum then
-        WindUI:Notify({ Title = "⚠️ 未找到角色", Duration = 2 })
-        return
-    end
+    if not hum then return end
 
-    flying = not flying
-
-    if flying then
-        for _, state in ipairs(Enum.HumanoidStateType:GetEnumItems()) do
-            hum:SetStateEnabled(state, false)
-        end
-        hum:SetStateEnabled(Enum.HumanoidStateType.Jumping, true)
-        hum:SetStateEnabled(Enum.HumanoidStateType.Running, true)
-        hum:SetStateEnabled(Enum.HumanoidStateType.Landed, true)
-        hum:SetStateEnabled(Enum.HumanoidStateType.PlatformStanding, true)
-
+    if flyEnabled then
         hum.PlatformStand = true
+        hum:SetStateEnabled(Enum.HumanoidStateType.Climbing, false)
+        hum:SetStateEnabled(Enum.HumanoidStateType.FallingDown, false)
+        hum:SetStateEnabled(Enum.HumanoidStateType.Flying, false)
+        hum:SetStateEnabled(Enum.HumanoidStateType.Freefall, false)
+        hum:SetStateEnabled(Enum.HumanoidStateType.GettingUp, false)
+        hum:SetStateEnabled(Enum.HumanoidStateType.Jumping, false)
+        hum:SetStateEnabled(Enum.HumanoidStateType.Landed, false)
+        hum:SetStateEnabled(Enum.HumanoidStateType.Physics, false)
+        hum:SetStateEnabled(Enum.HumanoidStateType.PlatformStanding, false)
+        hum:SetStateEnabled(Enum.HumanoidStateType.Ragdoll, false)
+        hum:SetStateEnabled(Enum.HumanoidStateType.Running, false)
+        hum:SetStateEnabled(Enum.HumanoidStateType.RunningNoPhysics, false)
+        hum:SetStateEnabled(Enum.HumanoidStateType.Seated, false)
+        hum:SetStateEnabled(Enum.HumanoidStateType.StrafingNoPhysics, false)
+        hum:SetStateEnabled(Enum.HumanoidStateType.Swimming, false)
+        hum:ChangeState(Enum.HumanoidStateType.Swimming)
+        char.Animate.Disabled = true
 
-        flyBodyVelocity = Instance.new("BodyVelocity")
-        flyBodyVelocity.MaxForce = Vector3.new(4000, 4000, 4000)
-        flyBodyVelocity.Velocity = Vector3.new(0, 0, 0)
-        flyBodyVelocity.Parent = char
+        flyBV = Instance.new("BodyVelocity")
+        flyBV.MaxForce = Vector3.new(1e9, 1e9, 1e9)
+        flyBV.Velocity = Vector3.new(0, 0, 0)
+        flyBV.Parent = char
 
-        flyBodyGyro = Instance.new("BodyGyro")
-        flyBodyGyro.MaxTorque = Vector3.new(4000, 4000, 4000)
-        flyBodyGyro.P = 5000
-        flyBodyGyro.CFrame = char.HumanoidRootPart.CFrame
-        flyBodyGyro.Parent = char
-
-        touchStart = nil
-        touchMove = nil
-        flyDirection = Vector3.new(0, 0, 0)
-
-        WindUI:Notify({ Title = "✅ 飞行已开启", Content = "触摸屏幕移动，点击跳跃键上升", Duration = 3 })
+        WindUI:Notify({ Title = "✅ 飞行已开启", Content = "WASD移动，Space上升，Shift下降", Duration = 3 })
 
         task.spawn(function()
-            while flying and char and char.Parent do
+            while flyEnabled and char and char.Parent do
                 local hrp = char:FindFirstChild("HumanoidRootPart")
                 if not hrp then break end
-
-                if touchMove then
-                    local diff = touchMove - touchStart
-                    if diff.Magnitude > 10 then
-                        local camCF = Camera.CFrame
-                        local forward = camCF.LookVector
-                        local right = camCF.RightVector
-                        local moveX = math.clamp(diff.X / 50, -1, 1)
-                        local moveY = math.clamp(-diff.Y / 50, -1, 1)
-                        flyDirection = (right * moveX + forward * moveY) * flySpeed
-                    end
-                end
-
-                -- 跳跃键上升
-                if UserInputService:IsKeyDown(Enum.KeyCode.Space) then
-                    flyDirection = flyDirection + Vector3.new(0, flySpeed, 0)
-                end
-
-                if flyBodyVelocity then
-                    flyBodyVelocity.Velocity = flyDirection
-                end
-                if flyBodyGyro and hrp then
-                    flyBodyGyro.CFrame = hrp.CFrame
-                end
-
+                local move = Vector3.new(0, 0, 0)
+                local speed = 50
+                if UserInputService:IsKeyDown(Enum.KeyCode.W) then move = move + Camera.CFrame.LookVector * speed end
+                if UserInputService:IsKeyDown(Enum.KeyCode.S) then move = move - Camera.CFrame.LookVector * speed end
+                if UserInputService:IsKeyDown(Enum.KeyCode.A) then move = move - Camera.CFrame.RightVector * speed end
+                if UserInputService:IsKeyDown(Enum.KeyCode.D) then move = move + Camera.CFrame.RightVector * speed end
+                if UserInputService:IsKeyDown(Enum.KeyCode.Space) then move = move + Vector3.new(0, speed, 0) end
+                if UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) then move = move - Vector3.new(0, speed, 0) end
+                flyBV.Velocity = move
                 task.wait()
             end
         end)
-
     else
         hum.PlatformStand = false
         for _, state in ipairs(Enum.HumanoidStateType:GetEnumItems()) do
             hum:SetStateEnabled(state, true)
         end
-        if flyBodyVelocity then flyBodyVelocity:Destroy() flyBodyVelocity = nil end
-        if flyBodyGyro then flyBodyGyro:Destroy() flyBodyGyro = nil end
-        touchStart = nil
-        touchMove = nil
-        flyDirection = Vector3.new(0, 0, 0)
+        char.Animate.Disabled = false
         hum:ChangeState(Enum.HumanoidStateType.RunningNoPhysics)
+        if flyBV then flyBV:Destroy() flyBV = nil end
         WindUI:Notify({ Title = "✅ 飞行已关闭", Duration = 2 })
     end
 end
 
--- 触摸控制
-UserInputService.TouchStarted:Connect(function(touch)
-    touchCount = touchCount + 1
-    if flying then
-        touchStart = touch.Position
-        touchMove = touch.Position
-    end
-end)
-
-UserInputService.TouchMoved:Connect(function(touch)
-    if flying and touchStart then
-        touchMove = touch.Position
-    end
-end)
-
-UserInputService.TouchEnded:Connect(function()
-    if touchCount > 0 then touchCount = touchCount - 1 end
-    if flying then
-        touchStart = nil
-        touchMove = nil
-        flyDirection = Vector3.new(0, 0, 0)
-    end
-end)
-
 -- ============================================================
---  自动攻击
+--  自动攻击（原始骷髅脚本逻辑 + 攻速调节）
 -- ============================================================
 local attackRunning = false
+local attackCoroutine = nil
 
 local function ToggleAttack()
     attackRunning = not attackRunning
     if attackRunning then
-        WindUI:Notify({ Title = "✅ 自动攻击已开启", Duration = 3 })
-        task.spawn(function()
+        WindUI:Notify({ Title = "✅ 自动攻击已开启", Content = "攻速: " .. Settings.swingSpeed, Duration = 3 })
+        attackCoroutine = task.spawn(function()
             while attackRunning do
                 for _, w in ipairs(weaponConfigs) do
                     local obj = w.get()
                     if obj and swingEvent then
-                        pcall(function() swingEvent:FireServer(obj, w.id, w.dir) end)
+                        pcall(function()
+                            swingEvent:FireServer(obj, w.id, w.dir)
+                        end)
                     end
                 end
                 task.wait(Settings.swingSpeed)
             end
         end)
     else
-        WindUI:Notify({ Title = "✅ 自动攻击已关闭", Duration = 3 })
+        if attackCoroutine then task.cancel(attackCoroutine) attackCoroutine = nil end
+        WindUI:Notify({ Title = "✅ 自动攻击已关闭", Duration = 2 })
     end
 end
 
@@ -799,9 +637,9 @@ local healRunning = false
 local function ToggleHeal()
     healRunning = not healRunning
     if healRunning then
-        WindUI:Notify({ Title = "✅ 自动喝药已开启", Content = "血量低于 " .. Settings.healThreshold .. "% 时自动喝药", Duration = 3 })
+        WindUI:Notify({ Title = "✅ 自动喝药已开启", Content = "阈值: " .. Settings.healThreshold .. "%", Duration = 3 })
     else
-        WindUI:Notify({ Title = "✅ 自动喝药已关闭", Duration = 3 })
+        WindUI:Notify({ Title = "✅ 自动喝药已关闭", Duration = 2 })
     end
 end
 
@@ -810,20 +648,19 @@ RunService.Heartbeat:Connect(function()
     if not useEvent then return end
     local char = LocalPlayer.Character
     if not char then return end
-    local humanoid = char:FindFirstChild("Humanoid")
-    if not humanoid then return end
-    local health = humanoid.Health
-    local maxHealth = humanoid.MaxHealth
-    if maxHealth <= 0 then return end
-    local percent = (health / maxHealth) * 100
-    if percent < Settings.healThreshold and health > 0 then
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    if not hum then return end
+    local hp = hum.Health
+    local maxHp = hum.MaxHealth
+    if maxHp <= 0 then return end
+    if (hp / maxHp) * 100 < Settings.healThreshold and hp > 0 then
         local now = os.clock()
         if now - lastHealTime >= healCooldown then
-            local items = ScanRealItems()
-            local snakeOilId = items["Snake Oil"] or items["蛇油"]
-            if snakeOilId then
+            local items = ScanItems()
+            local snakeId = items["Snake Oil"] or items["蛇油"]
+            if snakeId then
                 pcall(function()
-                    useEvent:FireServer(snakeOilId)
+                    useEvent:FireServer(snakeId)
                     lastHealTime = now
                 end)
             end
@@ -854,7 +691,7 @@ local Window = WindUI:CreateWindow({
 })
 
 Window:Tag({
-    Title = "v2.0",
+    Title = "v3.0",
     Icon = "smartphone",
     Color = Color3.fromHex("#1c1c1c"),
     Border = true,
@@ -1025,7 +862,12 @@ WeaponTab:Slider({
     Title = "攻击速度",
     Step = 0.001,
     Value = { Min = 0.001, Max = 0.1, Default = 0.02 },
-    Callback = function(v) Settings.swingSpeed = v end,
+    Callback = function(v)
+        Settings.swingSpeed = v
+        if attackRunning then
+            WindUI:Notify({ Title = "✅ 攻速已更新", Content = "当前: " .. v, Duration = 2 })
+        end
+    end,
 })
 
 -- ============================================================
@@ -1034,9 +876,9 @@ WeaponTab:Slider({
 local ItemTab = Window:Tab({ Title = "物品", Icon = "solar:box-bold" })
 
 ItemTab:Button({
-    Title = "🔍 扫描所有物品",
+    Title = "🔍 扫描 0~10000",
     Callback = function()
-        local items = ScanRealItems()
+        local items = ScanItems()
         local count = 0
         for name, id in pairs(items) do
             count = count + 1
@@ -1047,89 +889,53 @@ ItemTab:Button({
 })
 
 ItemTab:Button({
-    Title = "🎲 随机刷（真实ID）",
+    Title = "📦 刷 ID 0~10000",
     Callback = function()
-        SpawnRandomItem()
-    end,
-})
-
-ItemTab:Button({
-    Title = "🔄 循环随机刷（切换）",
-    Callback = function()
-        if spawningEnabled then
-            StopSpawning()
-        else
-            StartRandomSpawnLoop(999)
-        end
-    end,
-})
-
-ItemTab:Button({
-    Title = "⏹ 停止刷取",
-    Callback = function()
-        StopSpawning()
-    end,
-})
-
-ItemTab:Button({
-    Title = "🎲 随机刷 x10",
-    Callback = function()
-        if spawningEnabled then
-            WindUI:Notify({ Title = "⚠️ 请先停止当前刷取", Duration = 2 })
-            return
-        end
-        for i = 1, 10 do
-            SpawnRandomItem()
-            task.wait(0.05)
-        end
+        SpawnRange(0, 10000)
     end,
 })
 
 ItemTab:Space()
-ItemTab:Section({ Title = "指定刷取" })
+ItemTab:Section({ Title = "分类刷取" })
 
 local function CreateSpawnButton(itemName, label)
     ItemTab:Button({
         Title = label,
         Callback = function()
-            if spawningEnabled then
-                WindUI:Notify({ Title = "⚠️ 请先停止当前刷取", Duration = 2 })
-                return
-            end
-            SpawnRealItem(itemName)
+            SpawnByName(itemName)
         end,
     })
 end
 
-CreateSpawnButton("国库券", "💵 刷国库券")
-CreateSpawnButton("金条", "🪙 刷金条")
-CreateSpawnButton("银条", "🪙 刷银条")
-CreateSpawnButton("金酒杯", "🏆 刷金酒杯")
-CreateSpawnButton("银酒杯", "🏆 刷银酒杯")
-CreateSpawnButton("金盘子", "🍽️ 刷金盘子")
-CreateSpawnButton("银盘子", "🍽️ 刷银盘子")
-CreateSpawnButton("金画像", "🖼️ 刷金画像")
-CreateSpawnButton("银画像", "🖼️ 刷银画像")
-CreateSpawnButton("金雕像", "🗿 刷金雕像")
-CreateSpawnButton("银雕像", "🗿 刷银雕像")
-CreateSpawnButton("步枪", "🔫 刷步枪")
-CreateSpawnButton("海军手枪", "🔫 刷海军手枪")
-CreateSpawnButton("手枪", "🔫 刷手枪")
-CreateSpawnButton("散弹枪", "🔫 刷散弹枪")
-CreateSpawnButton("烟花枪", "🎆 刷烟花枪")
-CreateSpawnButton("吸血鬼刀", "🗡️ 刷吸血鬼刀")
-CreateSpawnButton("翡翠宝刀", "🗡️ 刷翡翠宝刀")
-CreateSpawnButton("步枪子弹", "📦 刷步枪子弹")
-CreateSpawnButton("散弹枪子弹", "📦 刷散弹枪子弹")
-CreateSpawnButton("中型子弹", "📦 刷中型子弹")
-CreateSpawnButton("重型子弹", "📦 刷重型子弹")
-CreateSpawnButton("轻型子弹", "📦 刷轻型子弹")
-CreateSpawnButton("烟花枪子弹", "📦 刷烟花枪子弹")
-CreateSpawnButton("蛇油", "🧪 刷蛇油")
-CreateSpawnButton("绷带", "🩹 刷绷带")
-CreateSpawnButton("煤", "🪨 刷煤")
-CreateSpawnButton("奇怪的面具", "🎭 刷奇怪的面具")
-CreateSpawnButton("危险巴士", "🚌 刷危险巴士")
+CreateSpawnButton("国库券", "💵 国库券")
+CreateSpawnButton("金条", "🪙 金条")
+CreateSpawnButton("银条", "🪙 银条")
+CreateSpawnButton("金酒杯", "🏆 金酒杯")
+CreateSpawnButton("银酒杯", "🏆 银酒杯")
+CreateSpawnButton("金盘子", "🍽️ 金盘子")
+CreateSpawnButton("银盘子", "🍽️ 银盘子")
+CreateSpawnButton("金画像", "🖼️ 金画像")
+CreateSpawnButton("银画像", "🖼️ 银画像")
+CreateSpawnButton("金雕像", "🗿 金雕像")
+CreateSpawnButton("银雕像", "🗿 银雕像")
+CreateSpawnButton("步枪", "🔫 步枪")
+CreateSpawnButton("海军手枪", "🔫 海军手枪")
+CreateSpawnButton("手枪", "🔫 手枪")
+CreateSpawnButton("散弹枪", "🔫 散弹枪")
+CreateSpawnButton("烟花枪", "🎆 烟花枪")
+CreateSpawnButton("吸血鬼刀", "🗡️ 吸血鬼刀")
+CreateSpawnButton("翡翠宝刀", "🗡️ 翡翠宝刀")
+CreateSpawnButton("步枪子弹", "📦 步枪子弹")
+CreateSpawnButton("散弹枪子弹", "📦 散弹枪子弹")
+CreateSpawnButton("中型子弹", "📦 中型子弹")
+CreateSpawnButton("重型子弹", "📦 重型子弹")
+CreateSpawnButton("轻型子弹", "📦 轻型子弹")
+CreateSpawnButton("烟花枪子弹", "📦 烟花枪子弹")
+CreateSpawnButton("蛇油", "🧪 蛇油")
+CreateSpawnButton("绷带", "🩹 绷带")
+CreateSpawnButton("煤", "🪨 煤")
+CreateSpawnButton("奇怪的面具", "🎭 奇怪的面具")
+CreateSpawnButton("危险巴士", "🚌 危险巴士")
 
 -- ============================================================
 --  设置标签页
@@ -1159,10 +965,21 @@ SettingsTab:Slider({
     Callback = function(v)
         Settings.healThreshold = v
         if healRunning then
-            WindUI:Notify({ Title = "✅ 喝药阈值已更新", Content = "血量低于 " .. v .. "% 时自动喝药", Duration = 3 })
+            WindUI:Notify({ Title = "✅ 阈值已更新", Content = "血量低于 " .. v .. "% 自动喝药", Duration = 3 })
         end
     end,
 })
+
+-- ============================================================
+--  触摸控制
+-- ============================================================
+UserInputService.TouchStarted:Connect(function()
+    touchCount = touchCount + 1
+end)
+
+UserInputService.TouchEnded:Connect(function()
+    if touchCount > 0 then touchCount = touchCount - 1 end
+end)
 
 -- ============================================================
 --  启动提示
