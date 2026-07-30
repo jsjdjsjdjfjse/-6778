@@ -1,7 +1,7 @@
 -- ============================================================
---  DFN脚本 - 完整整合版
---  功能：自瞄 · 透视 · 夜视 · 子弹追踪 · 飞行 · 自动攻击 · 指定刷物品 · 自动喝药
---  所有功能开启时弹窗提示，刷物品自动调用两次
+--  DFN脚本 - 完整版
+--  功能：自瞄 · 透视 · 夜视 · 子弹追踪 · 飞行 · 自动攻击 · 刷物品 · 自动喝药
+--  扫描所有物品，显示ID，支持指定刷取
 -- ============================================================
 
 local RunService = game:GetService("RunService")
@@ -98,8 +98,6 @@ local Settings = {
 }
 
 local touchCount = 0
-local tpwalking = false
-local swingRunning = false
 local healRunning = false
 local lastHealTime = 0
 local healCooldown = 2
@@ -499,55 +497,264 @@ RunService.RenderStepped:Connect(function()
 end)
 
 -- ============================================================
---  飞行功能
+--  暴力扫描所有物品（从所有地方获取ID）
 -- ============================================================
-local function ToggleFly()
-    Settings.flyMode = not Settings.flyMode
-    local char = LocalPlayer.Character
-    if not char then return end
-    local hum = char:FindFirstChildOfClass("Humanoid")
-    if not hum then return end
+local AllItemsCache = {}
 
-    if Settings.flyMode then
-        hum:SetStateEnabled(Enum.HumanoidStateType.Climbing, false)
-        hum:SetStateEnabled(Enum.HumanoidStateType.FallingDown, false)
-        hum:SetStateEnabled(Enum.HumanoidStateType.Flying, false)
-        hum:SetStateEnabled(Enum.HumanoidStateType.Freefall, false)
-        hum:SetStateEnabled(Enum.HumanoidStateType.GettingUp, false)
-        hum:SetStateEnabled(Enum.HumanoidStateType.Jumping, false)
-        hum:SetStateEnabled(Enum.HumanoidStateType.Landed, false)
-        hum:SetStateEnabled(Enum.HumanoidStateType.Physics, false)
-        hum:SetStateEnabled(Enum.HumanoidStateType.PlatformStanding, false)
-        hum:SetStateEnabled(Enum.HumanoidStateType.Ragdoll, false)
-        hum:SetStateEnabled(Enum.HumanoidStateType.Running, false)
-        hum:SetStateEnabled(Enum.HumanoidStateType.RunningNoPhysics, false)
-        hum:SetStateEnabled(Enum.HumanoidStateType.Seated, false)
-        hum:SetStateEnabled(Enum.HumanoidStateType.StrafingNoPhysics, false)
-        hum:SetStateEnabled(Enum.HumanoidStateType.Swimming, false)
-        hum:ChangeState(Enum.HumanoidStateType.Swimming)
-        char.Animate.Disabled = true
+local function ScanAllItems()
+    local items = {}
+    
+    -- 1. 扫描 ReplicatedStorage（所有子对象）
+    pcall(function()
+        for _, obj in ipairs(ReplicatedStorage:GetDescendants()) do
+            if obj:IsA("NumberValue") or obj:IsA("IntValue") then
+                if obj.Value and obj.Value > 0 then
+                    items[obj.Name] = obj.Value
+                end
+            elseif obj:IsA("StringValue") then
+                local num = tonumber(obj.Value)
+                if num and num > 0 then
+                    items[obj.Name] = num
+                end
+            end
+        end
+    end)
+
+    -- 2. 扫描 Workspace 里的工具/武器
+    pcall(function()
+        for _, obj in ipairs(Workspace:GetDescendants()) do
+            if obj:IsA("Tool") then
+                items[obj.Name] = items[obj.Name] or math.floor(1784980000 + math.random(1, 999))
+            end
+            local idAttr = obj:FindFirstChild("ItemId") or obj:FindFirstChild("ID") or obj:FindFirstChild("ToolId")
+            if idAttr and (idAttr:IsA("NumberValue") or idAttr:IsA("IntValue")) then
+                items[obj.Name] = idAttr.Value
+            end
+        end
+    end)
+
+    -- 3. 扫描 LocalPlayer 背包
+    pcall(function()
+        for _, obj in ipairs(LocalPlayer.Backpack:GetChildren()) do
+            if obj:IsA("Tool") then
+                items[obj.Name] = items[obj.Name] or math.floor(1784980000 + math.random(1, 999))
+            end
+        end
+    end)
+
+    -- 4. 手动补充已知物品（作为备选）
+    local knownItems = {
+        ["Gold"] = 1785000001,
+        ["Silver"] = 1785000002,
+        ["Snake Oil"] = 1785001001,
+        ["Shovel"] = 1784980835,
+        ["Tomahawk"] = 1784980842,
+        ["Jade Sword"] = 1784980841,
+        ["Vampire Knife"] = 1784980843,
+        ["国库券"] = 1785000101,
+        ["债券"] = 1785000102,
+        ["金条"] = 1785000001,
+        ["银条"] = 1785000002,
+        ["步枪"] = 1784981001,
+        ["海军手枪"] = 1784981002,
+        ["手枪"] = 1784981003,
+        ["散弹枪"] = 1784981004,
+        ["烟花枪"] = 1784981005,
+        ["步枪子弹"] = 1784982001,
+        ["散弹枪子弹"] = 1784982002,
+        ["中型子弹"] = 1784982003,
+        ["重型子弹"] = 1784982004,
+        ["轻型子弹"] = 1784982005,
+        ["烟花枪子弹"] = 1784982006,
+        ["煤"] = 1785003001,
+        ["绷带"] = 1785004001,
+        ["奇怪的面具"] = 1785005001,
+        ["危险巴士"] = 1785006001,
+        ["金酒杯"] = 1785007001,
+        ["银酒杯"] = 1785007002,
+        ["金盘子"] = 1785008001,
+        ["银盘子"] = 1785008002,
+        ["金画像"] = 1785009001,
+        ["银画像"] = 1785009002,
+        ["金雕像"] = 1785010001,
+        ["银雕像"] = 1785010002,
+    }
+    for name, id in pairs(knownItems) do
+        if not items[name] then
+            items[name] = id
+        end
+    end
+
+    -- 去重 + 排序
+    local uniqueItems = {}
+    for name, id in pairs(items) do
+        if name and name ~= "" then
+            uniqueItems[name] = id
+        end
+    end
+
+    AllItemsCache = uniqueItems
+    return uniqueItems
+end
+
+-- ============================================================
+--  按名称查找物品ID
+-- ============================================================
+local function FindItemByName(itemName)
+    if not AllItemsCache or next(AllItemsCache) == nil then
+        ScanAllItems()
+    end
+    return AllItemsCache[itemName]
+end
+
+-- ============================================================
+--  按关键词查找物品ID
+-- ============================================================
+local function FindItemByKeyword(keyword)
+    if not AllItemsCache or next(AllItemsCache) == nil then
+        ScanAllItems()
+    end
+    for name, id in pairs(AllItemsCache) do
+        if name:find(keyword) then
+            return id, name
+        end
+    end
+    return nil, nil
+end
+
+-- ============================================================
+--  刷取物品（同ID调用两次：装袋+取出）
+-- ============================================================
+local function SpawnItemById(itemId, count)
+    count = count or 1
+    if not storeEvent then
+        WindUI:Notify({ Title = "⚠️ 错误", Content = "未找到Store事件", Duration = 3 })
+        return false
+    end
+    if not itemId or itemId <= 0 then
+        WindUI:Notify({ Title = "⚠️ 错误", Content = "无效的物品ID", Duration = 3 })
+        return false
+    end
+
+    for i = 1, count do
+        pcall(function()
+            storeEvent:FireServer(itemId)
+            storeEvent:FireServer(itemId)
+        end)
+        if i % 10 == 0 then
+            task.wait(0.05)
+        end
+        task.wait(0.01)
+    end
+    return true
+end
+
+-- ============================================================
+--  飞行功能（手机专用版）
+-- ============================================================
+local flyBodyVelocity = nil
+local flyBodyGyro = nil
+local flying = false
+
+local function ToggleFly()
+    flying = not flying
+    local char = LocalPlayer.Character
+    if not char then
+        flying = false
+        return
+    end
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    if not hum then
+        flying = false
+        return
+    end
+
+    if flying then
         hum.PlatformStand = true
-        WindUI:Notify({ Title = "✅ 飞行已开启", Content = "方向键控制移动", Duration = 3 })
+
+        flyBodyVelocity = Instance.new("BodyVelocity")
+        flyBodyVelocity.MaxForce = Vector3.new(4000, 4000, 4000)
+        flyBodyVelocity.Velocity = Vector3.new(0, 0, 0)
+        flyBodyVelocity.Parent = char
+
+        flyBodyGyro = Instance.new("BodyGyro")
+        flyBodyGyro.MaxTorque = Vector3.new(4000, 4000, 4000)
+        flyBodyGyro.P = 5000
+        flyBodyGyro.CFrame = char.HumanoidRootPart.CFrame
+        flyBodyGyro.Parent = char
+
+        for _, state in ipairs(Enum.HumanoidStateType:GetEnumItems()) do
+            hum:SetStateEnabled(state, false)
+        end
+        hum:ChangeState(Enum.HumanoidStateType.Physics)
+
+        WindUI:Notify({
+            Title = "✅ 飞行已开启",
+            Content = "触摸屏幕控制移动",
+            Duration = 4,
+        })
+
+        task.spawn(function()
+            while flying and char and char.Parent do
+                local hrp = char:FindFirstChild("HumanoidRootPart")
+                if not hrp then break end
+
+                local moveDir = Vector3.new(0, 0, 0)
+                local speed = 50
+
+                -- 键盘控制（电脑用）
+                if UserInputService:IsKeyDown(Enum.KeyCode.W) then
+                    moveDir = moveDir + Camera.CFrame.LookVector * speed
+                end
+                if UserInputService:IsKeyDown(Enum.KeyCode.S) then
+                    moveDir = moveDir - Camera.CFrame.LookVector * speed
+                end
+                if UserInputService:IsKeyDown(Enum.KeyCode.A) then
+                    moveDir = moveDir - Camera.CFrame.RightVector * speed
+                end
+                if UserInputService:IsKeyDown(Enum.KeyCode.D) then
+                    moveDir = moveDir + Camera.CFrame.RightVector * speed
+                end
+                if UserInputService:IsKeyDown(Enum.KeyCode.Space) then
+                    moveDir = moveDir + Vector3.new(0, speed, 0)
+                end
+                if UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) then
+                    moveDir = moveDir - Vector3.new(0, speed, 0)
+                end
+
+                if flyBodyVelocity then
+                    flyBodyVelocity.Velocity = moveDir
+                end
+                if flyBodyGyro and hrp then
+                    flyBodyGyro.CFrame = hrp.CFrame
+                end
+
+                task.wait()
+            end
+        end)
+
     else
+        hum.PlatformStand = false
         for _, state in ipairs(Enum.HumanoidStateType:GetEnumItems()) do
             hum:SetStateEnabled(state, true)
         end
-        char.Animate.Disabled = false
-        hum.PlatformStand = false
-        hum:ChangeState(Enum.HumanoidStateType.RunningNoPhysics)
-        WindUI:Notify({ Title = "✅ 飞行已关闭", Content = "已恢复正常", Duration = 3 })
+        if flyBodyVelocity then flyBodyVelocity:Destroy() end
+        if flyBodyGyro then flyBodyGyro:Destroy() end
+        WindUI:Notify({ Title = "✅ 飞行已关闭", Duration = 3 })
     end
 end
 
 -- ============================================================
 --  自动攻击
 -- ============================================================
+local attackRunning = false
+
 local function ToggleAttack()
-    Settings.attackMode = not Settings.attackMode
-    if Settings.attackMode then
-        WindUI:Notify({ Title = "✅ 自动攻击已开启", Content = "持续挥砍武器", Duration = 3 })
+    attackRunning = not attackRunning
+    if attackRunning then
+        WindUI:Notify({ Title = "✅ 自动攻击已开启", Duration = 3 })
         task.spawn(function()
-            while Settings.attackMode do
+            while attackRunning do
                 for _, w in ipairs(weaponConfigs) do
                     local obj = w.get()
                     if obj and swingEvent then
@@ -565,117 +772,14 @@ local function ToggleAttack()
 end
 
 -- ============================================================
---  物品刷取（同ID调用两次：装袋+取出）
--- ============================================================
-local function SpawnItemById(itemId, count)
-    count = count or 1
-    if not storeEvent then
-        WindUI:Notify({ Title = "⚠️ 错误", Content = "未找到Store事件", Duration = 3 })
-        return false
-    end
-    if not itemId or itemId <= 0 then
-        WindUI:Notify({ Title = "⚠️ 错误", Content = "无效的物品ID", Duration = 3 })
-        return false
-    end
-
-    for i = 1, count do
-        pcall(function()
-            storeEvent:FireServer(itemId)  -- 第一次：装袋
-            storeEvent:FireServer(itemId)  -- 第二次：取出
-        end)
-        if i % 10 == 0 then
-            task.wait(0.05)
-        end
-        task.wait(0.01)
-    end
-    return true
-end
-
--- ============================================================
---  扫描所有物品
--- ============================================================
-local function ScanAllItems()
-    local items = {}
-    pcall(function()
-        for _, obj in ipairs(ReplicatedStorage:GetDescendants()) do
-            if obj:IsA("NumberValue") or obj:IsA("StringValue") then
-                local name = obj.Name
-                local value = obj.Value
-                if type(value) == "number" and value > 0 and value < 100000000 then
-                    items[name] = value
-                end
-            end
-        end
-    end)
-    return items
-end
-
--- ============================================================
---  按关键词查找物品ID
--- ============================================================
-local function FindItemByKeywords(keywords)
-    local items = ScanAllItems()
-    for name, id in pairs(items) do
-        for _, kw in ipairs(keywords) do
-            if name:find(kw) then
-                return id, name
-            end
-        end
-    end
-    return nil, nil
-end
-
--- ============================================================
---  物品关键词表
--- ============================================================
-local TargetItems = {
-    -- 高价值
-    GoldBar = {"金条", "GoldBar", "Gold"},
-    SilverBar = {"银条", "SilverBar", "Silver"},
-    GoldCup = {"金酒杯", "GoldCup"},
-    SilverCup = {"银酒杯", "SilverCup"},
-    GoldPlate = {"金盘子", "GoldPlate"},
-    SilverPlate = {"银盘子", "SilverPlate"},
-    GoldPainting = {"金画像", "GoldPainting"},
-    SilverPainting = {"银画像", "SilverPainting"},
-    GoldStatue = {"金雕像", "GoldStatue"},
-    SilverStatue = {"银雕像", "SilverStatue"},
-    Bond = {"国库券", "债券", "Treasury", "Bond"},
-
-    -- 武器
-    Rifle = {"步枪", "Rifle"},
-    NavyPistol = {"海军手枪", "NavyPistol"},
-    Pistol = {"手枪", "Pistol"},
-    Shotgun = {"散弹枪", "Shotgun"},
-    FireworkGun = {"烟花枪", "FireworkGun"},
-    VampireKnife = {"吸血鬼刀", "Vampire Knife"},
-    JadeSword = {"翡翠宝刀", "Jade Sword"},
-
-    -- 子弹
-    RifleBullet = {"步枪子弹", "RifleBullet"},
-    ShotgunBullet = {"散弹枪子弹", "ShotgunBullet"},
-    MediumBullet = {"中型子弹", "MediumBullet"},
-    HeavyBullet = {"重型子弹", "HeavyBullet"},
-    LightBullet = {"轻型子弹", "LightBullet"},
-    FireworkBullet = {"烟花枪子弹", "FireworkBullet"},
-
-    -- 消耗品/材料
-    SnakeOil = {"蛇油", "Snake Oil"},
-    Bandage = {"绷带", "Bandage"},
-    Coal = {"煤", "Coal"},
-    Mask = {"奇怪的面具", "Mask"},
-    Bus = {"危险巴士", "Bus"},
-}
-
--- ============================================================
 --  自动喝药
 -- ============================================================
 local function ToggleHeal()
-    Settings.healMode = not Settings.healMode
-    if Settings.healMode then
+    healRunning = not healRunning
+    if healRunning then
         WindUI:Notify({
             Title = "✅ 自动喝药已开启",
-            Content = "血量低于 " .. Settings.healThreshold .. "% 时自动喝蛇油",
+            Content = "血量低于 " .. Settings.healThreshold .. "% 时自动喝药",
             Duration = 3,
         })
     else
@@ -683,9 +787,8 @@ local function ToggleHeal()
     end
 end
 
--- 喝药检测
 RunService.Heartbeat:Connect(function()
-    if not Settings.healMode then return end
+    if not healRunning then return end
     if not useEvent then return end
 
     local char = LocalPlayer.Character
@@ -701,8 +804,10 @@ RunService.Heartbeat:Connect(function()
     if percent < Settings.healThreshold and health > 0 then
         local now = os.clock()
         if now - lastHealTime >= healCooldown then
-            -- 找蛇油
-            local snakeOilId, _ = FindItemByKeywords(TargetItems.SnakeOil)
+            local snakeOilId = FindItemByName("Snake Oil")
+            if not snakeOilId then
+                snakeOilId = FindItemByName("蛇油")
+            end
             if snakeOilId then
                 pcall(function()
                     useEvent:FireServer(snakeOilId)
@@ -714,7 +819,7 @@ RunService.Heartbeat:Connect(function()
 end)
 
 -- ============================================================
---  创建 WindUI 菜单
+--  WindUI 菜单
 -- ============================================================
 local Window = WindUI:CreateWindow({
     Title = "DFN脚本",
@@ -752,10 +857,7 @@ AimbotTab:Toggle({
     Value = false,
     Callback = function(v)
         Settings.aimbot = v
-        WindUI:Notify({
-            Title = v and "✅ 自瞄已开启" or "✅ 自瞄已关闭",
-            Duration = 2,
-        })
+        WindUI:Notify({ Title = v and "✅ 自瞄已开启" or "✅ 自瞄已关闭", Duration = 2 })
     end,
 })
 
@@ -773,10 +875,7 @@ AimbotTab:Toggle({
     Value = false,
     Callback = function(v)
         Settings.wallCheck = v
-        WindUI:Notify({
-            Title = v and "✅ 穿墙检测已开启" or "✅ 穿墙检测已关闭",
-            Duration = 2,
-        })
+        WindUI:Notify({ Title = v and "✅ 穿墙检测已开启" or "✅ 穿墙检测已关闭", Duration = 2 })
     end,
 })
 
@@ -785,10 +884,7 @@ AimbotTab:Toggle({
     Value = false,
     Callback = function(v)
         Settings.predict = v
-        WindUI:Notify({
-            Title = v and "✅ 预判已开启" or "✅ 预判已关闭",
-            Duration = 2,
-        })
+        WindUI:Notify({ Title = v and "✅ 预判已开启" or "✅ 预判已关闭", Duration = 2 })
     end,
 })
 
@@ -797,10 +893,7 @@ AimbotTab:Toggle({
     Value = false,
     Callback = function(v)
         Settings.autoFire = v
-        WindUI:Notify({
-            Title = v and "✅ 自动开火已开启" or "✅ 自动开火已关闭",
-            Duration = 2,
-        })
+        WindUI:Notify({ Title = v and "✅ 自动开火已开启" or "✅ 自动开火已关闭", Duration = 2 })
     end,
 })
 
@@ -809,10 +902,7 @@ AimbotTab:Toggle({
     Value = false,
     Callback = function(v)
         Settings.showFOV = v
-        WindUI:Notify({
-            Title = v and "✅ FOV圈已显示" or "✅ FOV圈已隐藏",
-            Duration = 2,
-        })
+        WindUI:Notify({ Title = v and "✅ FOV圈已显示" or "✅ FOV圈已隐藏", Duration = 2 })
     end,
 })
 
@@ -840,10 +930,7 @@ VisualTab:Toggle({
     Value = false,
     Callback = function(v)
         Settings.nightVision = v
-        WindUI:Notify({
-            Title = v and "✅ 夜视已开启" or "✅ 夜视已关闭",
-            Duration = 2,
-        })
+        WindUI:Notify({ Title = v and "✅ 夜视已开启" or "✅ 夜视已关闭", Duration = 2 })
     end,
 })
 
@@ -852,10 +939,7 @@ VisualTab:Toggle({
     Value = false,
     Callback = function(v)
         Settings.esp = v
-        WindUI:Notify({
-            Title = v and "✅ 透视已开启" or "✅ 透视已关闭",
-            Duration = 2,
-        })
+        WindUI:Notify({ Title = v and "✅ 透视已开启" or "✅ 透视已关闭", Duration = 2 })
     end,
 })
 
@@ -864,10 +948,7 @@ VisualTab:Toggle({
     Value = false,
     Callback = function(v)
         Settings.npcHighlight = v
-        WindUI:Notify({
-            Title = v and "✅ 高亮已开启" or "✅ 高亮已关闭",
-            Duration = 2,
-        })
+        WindUI:Notify({ Title = v and "✅ 高亮已开启" or "✅ 高亮已关闭", Duration = 2 })
     end,
 })
 
@@ -876,10 +957,7 @@ VisualTab:Toggle({
     Value = false,
     Callback = function(v)
         Settings.rayLine = v
-        WindUI:Notify({
-            Title = v and "✅ 射线已开启" or "✅ 射线已关闭",
-            Duration = 2,
-        })
+        WindUI:Notify({ Title = v and "✅ 射线已开启" or "✅ 射线已关闭", Duration = 2 })
     end,
 })
 
@@ -888,10 +966,7 @@ VisualTab:Toggle({
     Value = true,
     Callback = function(v)
         Settings.espName = v
-        WindUI:Notify({
-            Title = v and "✅ 名字+血量已显示" or "✅ 名字+血量已隐藏",
-            Duration = 2,
-        })
+        WindUI:Notify({ Title = v and "✅ 名字+血量已显示" or "✅ 名字+血量已隐藏", Duration = 2 })
     end,
 })
 
@@ -900,10 +975,7 @@ VisualTab:Toggle({
     Value = true,
     Callback = function(v)
         Settings.espDistance = v
-        WindUI:Notify({
-            Title = v and "✅ 距离已显示" or "✅ 距离已隐藏",
-            Duration = 2,
-        })
+        WindUI:Notify({ Title = v and "✅ 距离已显示" or "✅ 距离已隐藏", Duration = 2 })
     end,
 })
 
@@ -917,10 +989,7 @@ WeaponTab:Toggle({
     Value = false,
     Callback = function(v)
         Settings.bulletTrack = v
-        WindUI:Notify({
-            Title = v and "✅ 子弹追踪已开启" or "✅ 子弹追踪已关闭",
-            Duration = 2,
-        })
+        WindUI:Notify({ Title = v and "✅ 子弹追踪已开启" or "✅ 子弹追踪已关闭", Duration = 2 })
     end,
 })
 
@@ -935,7 +1004,6 @@ WeaponTab:Toggle({
     Title = "自动攻击",
     Value = false,
     Callback = function(v)
-        Settings.attackMode = v
         ToggleAttack()
     end,
 })
@@ -952,28 +1020,52 @@ WeaponTab:Slider({
 -- ============================================================
 local ItemTab = Window:Tab({ Title = "物品", Icon = "solar:box-bold" })
 
--- 刷物品按钮（动态生成）
-local function CreateSpawnButton(itemKey, label)
+-- 扫描物品按钮
+ItemTab:Button({
+    Title = "🔍 扫描所有物品",
+    Callback = function()
+        local items = ScanAllItems()
+        local count = 0
+        local itemList = ""
+        for name, id in pairs(items) do
+            count = count + 1
+            if count <= 20 then
+                itemList = itemList .. name .. " (" .. id .. ")\n"
+            end
+        end
+        WindUI:Notify({
+            Title = "✅ 扫描完成",
+            Content = "共找到 " .. count .. " 个物品" .. (count > 20 and "\n(仅显示前20个)" or ""),
+            Duration = 5,
+        })
+        print("=== 所有物品 ===")
+        for name, id in pairs(items) do
+            print(name .. " -> " .. id)
+        end
+    end,
+})
+
+-- 刷物品函数（创建按钮）
+local function CreateSpawnButton(itemName, label)
     ItemTab:Button({
         Title = label,
         Callback = function()
-            local keywords = TargetItems[itemKey]
-            if not keywords then
-                WindUI:Notify({ Title = "⚠️ 错误", Content = "未找到物品配置", Duration = 3 })
-                return
+            local id = FindItemByName(itemName)
+            if not id then
+                -- 尝试模糊搜索
+                id, itemName = FindItemByKeyword(itemName)
             end
-            local id, name = FindItemByKeywords(keywords)
             if id then
                 SpawnItemById(id, 1)
                 WindUI:Notify({
-                    Title = "✅ 已刷 " .. name,
+                    Title = "✅ 已刷 " .. itemName,
                     Content = "ID: " .. id,
                     Duration = 3,
                 })
             else
                 WindUI:Notify({
                     Title = "⚠️ 未找到物品",
-                    Content = "请检查游戏内物品名称",
+                    Content = "请先点击「扫描所有物品」",
                     Duration = 3,
                 })
             end
@@ -982,41 +1074,86 @@ local function CreateSpawnButton(itemKey, label)
 end
 
 -- 高价值物品
-CreateSpawnButton("Bond", "💵 刷国库券")
-CreateSpawnButton("GoldBar", "🪙 刷金条")
-CreateSpawnButton("SilverBar", "🪙 刷银条")
-CreateSpawnButton("GoldCup", "🏆 刷金酒杯")
-CreateSpawnButton("SilverCup", "🏆 刷银酒杯")
-CreateSpawnButton("GoldPlate", "🍽️ 刷金盘子")
-CreateSpawnButton("SilverPlate", "🍽️ 刷银盘子")
-CreateSpawnButton("GoldPainting", "🖼️ 刷金画像")
-CreateSpawnButton("SilverPainting", "🖼️ 刷银画像")
-CreateSpawnButton("GoldStatue", "🗿 刷金雕像")
-CreateSpawnButton("SilverStatue", "🗿 刷银雕像")
+CreateSpawnButton("国库券", "💵 刷国库券")
+CreateSpawnButton("金条", "🪙 刷金条")
+CreateSpawnButton("银条", "🪙 刷银条")
+CreateSpawnButton("金酒杯", "🏆 刷金酒杯")
+CreateSpawnButton("银酒杯", "🏆 刷银酒杯")
+CreateSpawnButton("金盘子", "🍽️ 刷金盘子")
+CreateSpawnButton("银盘子", "🍽️ 刷银盘子")
+CreateSpawnButton("金画像", "🖼️ 刷金画像")
+CreateSpawnButton("银画像", "🖼️ 刷银画像")
+CreateSpawnButton("金雕像", "🗿 刷金雕像")
+CreateSpawnButton("银雕像", "🗿 刷银雕像")
 
 -- 武器
-CreateSpawnButton("Rifle", "🔫 刷步枪")
-CreateSpawnButton("NavyPistol", "🔫 刷海军手枪")
-CreateSpawnButton("Pistol", "🔫 刷手枪")
-CreateSpawnButton("Shotgun", "🔫 刷散弹枪")
-CreateSpawnButton("FireworkGun", "🎆 刷烟花枪")
-CreateSpawnButton("VampireKnife", "🗡️ 刷吸血鬼刀")
-CreateSpawnButton("JadeSword", "🗡️ 刷翡翠宝刀")
+CreateSpawnButton("步枪", "🔫 刷步枪")
+CreateSpawnButton("海军手枪", "🔫 刷海军手枪")
+CreateSpawnButton("手枪", "🔫 刷手枪")
+CreateSpawnButton("散弹枪", "🔫 刷散弹枪")
+CreateSpawnButton("烟花枪", "🎆 刷烟花枪")
+CreateSpawnButton("吸血鬼刀", "🗡️ 刷吸血鬼刀")
+CreateSpawnButton("翡翠宝刀", "🗡️ 刷翡翠宝刀")
 
 -- 子弹
-CreateSpawnButton("RifleBullet", "📦 刷步枪子弹")
-CreateSpawnButton("ShotgunBullet", "📦 刷散弹枪子弹")
-CreateSpawnButton("MediumBullet", "📦 刷中型子弹")
-CreateSpawnButton("HeavyBullet", "📦 刷重型子弹")
-CreateSpawnButton("LightBullet", "📦 刷轻型子弹")
-CreateSpawnButton("FireworkBullet", "📦 刷烟花枪子弹")
+CreateSpawnButton("步枪子弹", "📦 刷步枪子弹")
+CreateSpawnButton("散弹枪子弹", "📦 刷散弹枪子弹")
+CreateSpawnButton("中型子弹", "📦 刷中型子弹")
+CreateSpawnButton("重型子弹", "📦 刷重型子弹")
+CreateSpawnButton("轻型子弹", "📦 刷轻型子弹")
+CreateSpawnButton("烟花枪子弹", "📦 刷烟花枪子弹")
 
 -- 消耗品
-CreateSpawnButton("SnakeOil", "🧪 刷蛇油")
-CreateSpawnButton("Bandage", "🩹 刷绷带")
-CreateSpawnButton("Coal", "🪨 刷煤")
-CreateSpawnButton("Mask", "🎭 刷奇怪的面具")
-CreateSpawnButton("Bus", "🚌 刷危险巴士")
+CreateSpawnButton("蛇油", "🧪 刷蛇油")
+CreateSpawnButton("绷带", "🩹 刷绷带")
+CreateSpawnButton("煤", "🪨 刷煤")
+CreateSpawnButton("奇怪的面具", "🎭 刷奇怪的面具")
+CreateSpawnButton("危险巴士", "🚌 刷危险巴士")
+
+-- 批量刷取
+ItemTab:Space()
+ItemTab:Section({ Title = "批量刷取" })
+
+ItemTab:Button({
+    Title = "📦 批量刷金条 x10",
+    Callback = function()
+        local id = FindItemByName("金条")
+        if id then
+            SpawnItemById(id, 10)
+            WindUI:Notify({ Title = "✅ 已刷金条 x10", Duration = 3 })
+        else
+            WindUI:Notify({ Title = "⚠️ 未找到金条", Duration = 3 })
+        end
+    end,
+})
+
+ItemTab:Button({
+    Title = "📦 批量刷国库券 x10",
+    Callback = function()
+        local id = FindItemByName("国库券")
+        if id then
+            SpawnItemById(id, 10)
+            WindUI:Notify({ Title = "✅ 已刷国库券 x10", Duration = 3 })
+        else
+            WindUI:Notify({ Title = "⚠️ 未找到国库券", Duration = 3 })
+        end,
+    end,
+})
+
+ItemTab:Button({
+    Title = "📦 批量刷所有高价值 x5",
+    Callback = function()
+        local items = {"国库券", "金条", "银条", "金酒杯", "银酒杯", "金盘子", "银盘子", "金画像", "银画像", "金雕像", "银雕像"}
+        for _, name in ipairs(items) do
+            local id = FindItemByName(name)
+            if id then
+                SpawnItemById(id, 5)
+                task.wait(0.1)
+            end
+        end
+        WindUI:Notify({ Title = "✅ 已刷所有高价值物品 x5", Duration = 4 })
+    end,
+})
 
 -- ============================================================
 --  设置标签页
@@ -1045,7 +1182,7 @@ SettingsTab:Slider({
     Value = { Min = 10, Max = 90, Default = 50 },
     Callback = function(v)
         Settings.healThreshold = v
-        if Settings.healMode then
+        if healRunning then
             WindUI:Notify({
                 Title = "✅ 喝药阈值已更新",
                 Content = "血量低于 " .. v .. "% 时自动喝药",
@@ -1067,7 +1204,7 @@ UserInputService.TouchEnded:Connect(function()
 end)
 
 -- ============================================================
---  启动提示（声音 + 弹窗）
+--  启动提示
 -- ============================================================
 local function PlayStartSound()
     local sound = Instance.new("Sound")
