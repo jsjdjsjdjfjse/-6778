@@ -1,3 +1,12 @@
+-- ============================================================
+--  DFN脚本 - 完整整合版（含信息标签页 + 刷物品关闭）
+--  功能：自瞄 · 透视 · 夜视 · 子弹追踪 · 飞行 · 自动攻击 · 自动喝蛇油 · 刷物品 · 实时物品透视
+--  刷物品：随机刷和循环随机刷都带关闭功能
+--  焊接功能：调试中，暂时不可用
+--  界面：青色主题
+--  作者：边牧 | 企鹅号：3475595188
+-- ============================================================
+
 local Players = game:GetService("Players")
 local LocalPlayer = Players.LocalPlayer
 local Workspace = game:GetService("Workspace")
@@ -10,6 +19,7 @@ local SoundService = game:GetService("SoundService")
 local Debris = game:GetService("Debris")
 
 local WindUI = loadstring(game:HttpGet("https://raw.githubusercontent.com/Footagesus/WindUI/main/dist/main.lua"))()
+if not WindUI then return end
 
 local storeEvent, swingEvent, useEvent, weldEvent, stopDragEvent
 pcall(function()
@@ -68,13 +78,16 @@ local Settings = {
     healThreshold = 50,
     healSpeed = 2,
     itemESP = false,
-    randomSpawn = false,
 }
 
 local touchCount = 0
 local lastHealTime = 0
-local randomSpawnRunning = false
-local randomSpawnCoroutine = nil
+
+-- ===== 刷物品状态 =====
+local randomRunning = false
+local randomCoroutine = nil
+local loopRandomRunning = false
+local loopRandomCoroutine = nil
 
 local NameTranslate = {
     ["Zombie"] = "僵尸",
@@ -501,56 +514,78 @@ local function GetNameToIdMap()
     return map
 end
 
+-- ===== 随机刷（带关闭） =====
 local function SpawnRandom()
+    if randomRunning then
+        randomRunning = false
+        if randomCoroutine then
+            task.cancel(randomCoroutine)
+            randomCoroutine = nil
+        end
+        WindUI:Notify({ Title = "⏹ 已停止随机刷", Duration = 2 })
+        return
+    end
     if not storeEvent then
         WindUI:Notify({ Title = "❌ Store事件不存在", Duration = 3 })
         return
     end
-    local count = 0
-    for id = 0, 5000 do
-        pcall(function()
-            storeEvent:FireServer(id)
-            storeEvent:FireServer(id)
-        end)
-        count = count + 1
-        task.wait(0.01)
-    end
-    WindUI:Notify({ Title = "✅ 随机刷完成", Content = "已刷 " .. count .. " 件", Duration = 3 })
+    randomRunning = true
+    WindUI:Notify({ Title = "🔄 开始随机刷", Content = "再次点击停止", Duration = 2 })
+    randomCoroutine = task.spawn(function()
+        for id = 0, 5000 do
+            if not randomRunning then break end
+            pcall(function()
+                storeEvent:FireServer(id)
+                storeEvent:FireServer(id)
+            end)
+            task.wait(0.01)
+        end
+        if randomRunning then
+            randomRunning = false
+            WindUI:Notify({ Title = "✅ 随机刷完成", Duration = 3 })
+        end
+    end)
 end
 
+-- ===== 循环随机刷（带关闭） =====
 local function SpawnRandomLoop()
-    randomSpawnRunning = not randomSpawnRunning
-    if randomSpawnRunning then
-        if not storeEvent then
-            WindUI:Notify({ Title = "❌ Store事件不存在", Duration = 3 })
-            randomSpawnRunning = false
-            return
+    if loopRandomRunning then
+        loopRandomRunning = false
+        if loopRandomCoroutine then
+            task.cancel(loopRandomCoroutine)
+            loopRandomCoroutine = nil
         end
-        WindUI:Notify({ Title = "🔄 随机刷已开启", Content = "点击停止按钮关闭", Duration = 3 })
-        randomSpawnCoroutine = task.spawn(function()
-            local count = 0
-            while randomSpawnRunning do
-                for id = 0, 5000 do
-                    if not randomSpawnRunning then break end
-                    pcall(function()
-                        storeEvent:FireServer(id)
-                        storeEvent:FireServer(id)
-                    end)
-                    count = count + 1
-                    task.wait(0.01)
-                end
-                if randomSpawnRunning then
-                    WindUI:Notify({ Title = "📊 已刷 " .. count .. " 件", Duration = 2 })
-                end
-            end
-        end)
-    else
-        if randomSpawnCoroutine then
-            task.cancel(randomSpawnCoroutine)
-            randomSpawnCoroutine = nil
-        end
-        WindUI:Notify({ Title = "⏹ 随机刷已停止", Duration = 2 })
+        WindUI:Notify({ Title = "⏹ 已停止循环刷", Duration = 2 })
+        return
     end
+    if not storeEvent then
+        WindUI:Notify({ Title = "❌ Store事件不存在", Duration = 3 })
+        return
+    end
+    loopRandomRunning = true
+    WindUI:Notify({ Title = "🔄 开始循环随机刷", Content = "再次点击停止", Duration = 2 })
+    loopRandomCoroutine = task.spawn(function()
+        local count = 0
+        while loopRandomRunning do
+            for id = 0, 5000 do
+                if not loopRandomRunning then break end
+                pcall(function()
+                    storeEvent:FireServer(id)
+                    storeEvent:FireServer(id)
+                end)
+                count = count + 1
+                task.wait(0.01)
+            end
+            if loopRandomRunning then
+                WindUI:Notify({ Title = "📊 已刷 " .. count .. " 件", Duration = 2 })
+            end
+            task.wait(0.5)
+        end
+        if loopRandomRunning then
+            loopRandomRunning = false
+            WindUI:Notify({ Title = "✅ 循环刷完成", Duration = 3 })
+        end
+    end)
 end
 
 local selectedItem = nil
@@ -630,175 +665,110 @@ local function SpawnByName()
     })
 end
 
-local itemHighlights = {}
-local itemESPEnabled = false
-local itemScanConnection = nil
+-- ============================================================
+--  实时贴合轮廓物品透视
+-- ============================================================
+local itemESPRunning = false
+local itemESPThread = nil
+local itemESPMarkers = {}
 
-local targetKeywords = {
-    "Gold", "Silver", "Coal", "Bandage", "Snake Oil",
-    "Sack", "Shovel", "Pistol", "Rifle", "Shotgun",
-    "Bond", "Diamond", "Ammo", "Revolver", "Dynamite"
-}
+local function clearItemESPMarkers()
+    for _, data in ipairs(itemESPMarkers) do
+        pcall(function()
+            if data.highlight then data.highlight:Destroy() end
+            if data.bill then data.bill:Destroy() end
+        end)
+    end
+    itemESPMarkers = {}
+end
 
-local function IsItem(obj)
-    if obj:IsA("Model") or obj:IsA("Tool") or obj:IsA("Part") then
-        for _, kw in ipairs(targetKeywords) do
-            if obj.Name:find(kw) then
-                return true
+local function getAttachPart(model)
+    local part = model.PrimaryPart
+    if part and part:IsA("BasePart") then return part end
+    local largest = nil
+    local maxSize = 0
+    for _, child in ipairs(model:GetDescendants()) do
+        if child:IsA("BasePart") then
+            local size = child.Size.Magnitude
+            if size > maxSize then
+                maxSize = size
+                largest = child
             end
         end
-        for _, child in ipairs(obj:GetDescendants()) do
-            if child:IsA("ProximityPrompt") then
-                local text = child.ObjectText or ""
-                for _, kw in ipairs(targetKeywords) do
-                    if text:find(kw) then
-                        return true
-                    end
+    end
+    return largest
+end
+
+local function scanAndMarkItems()
+    clearItemESPMarkers()
+    local count = 0
+
+    for _, obj in ipairs(Workspace:GetDescendants()) do
+        if obj:IsA("Model") then
+            local id = obj:GetAttribute("entity_server") or obj:GetAttribute("serverEntity")
+            if id then
+                local part = getAttachPart(obj)
+                if part then
+                    local highlight = Instance.new("Highlight")
+                    highlight.Adornee = obj
+                    highlight.FillColor = Color3.fromRGB(255, 0, 0)
+                    highlight.FillTransparency = 0.5
+                    highlight.OutlineColor = Color3.fromRGB(255, 255, 0)
+                    highlight.OutlineTransparency = 0
+                    highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+                    highlight.Parent = obj
+
+                    local bill = Instance.new("BillboardGui")
+                    bill.Size = UDim2.new(0, 300, 0, 40)
+                    bill.Adornee = part
+                    bill.AlwaysOnTop = true
+                    bill.MaxDistance = 500
+                    bill.Parent = part
+
+                    local label = Instance.new("TextLabel")
+                    label.Size = UDim2.new(1, 0, 1, 0)
+                    label.BackgroundTransparency = 1
+                    label.Text = obj.Name .. "\n" .. tostring(id)
+                    label.TextColor3 = Color3.fromRGB(0, 255, 255)
+                    label.Font = Enum.Font.SourceSansBold
+                    label.TextSize = 16
+                    label.TextStrokeTransparency = 0.3
+                    label.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
+                    label.Parent = bill
+
+                    table.insert(itemESPMarkers, {highlight = highlight, bill = bill})
+                    count = count + 1
                 end
             end
         end
     end
-    return false
+    return count
 end
 
-local function ScanItemESP()
-    if not itemESPEnabled then return end
-    for _, h in ipairs(itemHighlights) do
-        pcall(function() h:Destroy() end)
-    end
-    itemHighlights = {}
-    local count = 0
-    for _, obj in ipairs(Workspace:GetDescendants()) do
-        if IsItem(obj) then
-            if Players:GetPlayerFromCharacter(obj) then continue end
-            if obj:FindFirstChildOfClass("Humanoid") then continue end
-            local hl = Instance.new("Highlight")
-            hl.Adornee = obj
-            hl.FillColor = Color3.fromRGB(255, 215, 0)
-            hl.FillTransparency = 0.3
-            hl.OutlineColor = Color3.fromRGB(255, 0, 0)
-            hl.OutlineTransparency = 0.2
-            hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-            hl.Parent = obj
-            table.insert(itemHighlights, hl)
-            count = count + 1
+local function startItemESP()
+    if itemESPThread then return end
+    itemESPRunning = true
+    itemESPThread = task.spawn(function()
+        while itemESPRunning do
+            local cnt = scanAndMarkItems()
+            task.wait(0.1)
         end
-    end
-    if count > 0 then
-        print("🔦 物品透视: 已标记 " .. count .. " 件物品")
-    end
-end
-
-local function StartItemESP()
-    if itemScanConnection then
-        itemScanConnection:Disconnect()
-        itemScanConnection = nil
-    end
-    itemESPEnabled = true
-    ScanItemESP()
-    itemScanConnection = RunService.Heartbeat:Connect(function()
-        if itemESPEnabled then
-            ScanItemESP()
-        end
+        itemESPThread = nil
     end)
 end
 
-local function StopItemESP()
-    itemESPEnabled = false
-    if itemScanConnection then
-        itemScanConnection:Disconnect()
-        itemScanConnection = nil
+local function stopItemESP()
+    itemESPRunning = false
+    if itemESPThread then
+        task.cancel(itemESPThread)
+        itemESPThread = nil
     end
-    for _, h in ipairs(itemHighlights) do
-        pcall(function() h:Destroy() end)
-    end
-    itemHighlights = {}
+    clearItemESPMarkers()
 end
 
-local capturedStopDragId = nil
-
-if stopDragEvent then
-    local originalStopDrag = stopDragEvent.FireServer
-    stopDragEvent.FireServer = function(self, ...)
-        local args = {...}
-        if #args >= 1 then
-            local id = args[1]
-            if type(id) == "number" and id > 0 then
-                capturedStopDragId = id
-                print("🎯 StopDrag ID: " .. id)
-            end
-        end
-        return originalStopDrag(self, ...)
-    end
-end
-
-local function ExecuteWeld(id1, id2)
-    if not weldEvent then
-        WindUI:Notify({ Title = "❌ Weld不存在", Duration = 2 })
-        return false
-    end
-    if not id1 or not id2 then
-        WindUI:Notify({ Title = "⚠️ 参数不完整", Duration = 2 })
-        return false
-    end
-    pcall(function()
-        weldEvent:FireServer(id1, id2)
-        WindUI:Notify({ Title = "✅ 焊接成功", Content = id1 .. " → " .. id2, Duration = 2 })
-    end)
-    return true
-end
-
-local function CreateWeldButton()
-    local btnGui = Instance.new("ScreenGui")
-    btnGui.Name = "WeldButton"
-    btnGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
-    btnGui.ResetOnSpawn = false
-
-    local btn = Instance.new("TextButton")
-    btn.Size = UDim2.new(0, 70, 0, 70)
-    btn.Position = UDim2.new(0.85, -35, 0.1, 0)
-    btn.BackgroundColor3 = Color3.fromRGB(0, 150, 200)
-    btn.BackgroundTransparency = 0.5
-    btn.TextColor3 = Color3.fromRGB(255, 255, 255)
-    btn.Text = "🔧\n焊接"
-    btn.TextSize = 14
-    btn.Font = Enum.Font.SourceSansBold
-    btn.BorderSizePixel = 2
-    btn.BorderColor3 = Color3.fromRGB(255, 255, 255)
-    btn.Parent = btnGui
-    btn.ZIndex = 10
-    btn.Active = true
-    btn.Selectable = true
-
-    btn.MouseButton1Click:Connect(function()
-        if not capturedStopDragId then
-            WindUI:Notify({ Title = "⚠️ 请先拖拽物品", Content = "触发StopDrag自动捕获ID", Duration = 3 })
-            return
-        end
-        ExecuteWeld(3109, capturedStopDragId)
-    end)
-
-    local dragging = false
-    local startPos = nil
-    btn.InputBegan:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
-            dragging = true
-            startPos = input.Position
-        end
-    end)
-    btn.InputChanged:Connect(function(input)
-        if dragging and (input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseMovement) then
-            local size = workspace.CurrentCamera.ViewportSize
-            btn.Position = UDim2.new(math.clamp(input.Position.X / size.X, 0, 0.9), 0, math.clamp(input.Position.Y / size.Y, 0, 0.9), 0)
-        end
-    end)
-    btn.InputEnded:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
-            dragging = false
-        end
-    end)
-end
-
+-- ============================================================
+--  飞行功能
+-- ============================================================
 local flyEnabled = false
 local flyBV = nil
 
@@ -932,6 +902,9 @@ RunService.Heartbeat:Connect(function()
     end
 end)
 
+-- ============================================================
+--  WindUI 菜单（青色主题）
+-- ============================================================
 local Window = WindUI:CreateWindow({
     Title = "DFN脚本",
     Folder = "DFN",
@@ -958,7 +931,35 @@ Window:Tag({
     Border = true,
 })
 
+-- 改为青色主题
+pcall(function()
+    local frame = Window.Frame
+    if frame then
+        frame.BackgroundColor3 = Color3.fromRGB(0, 180, 200)
+        frame.BackgroundTransparency = 0.15
+        frame.BorderColor3 = Color3.fromRGB(0, 255, 255)
+    end
+end)
+
+pcall(function()
+    local titleBar = Window.Frame and Window.Frame:FindFirstChild("TitleBar")
+    if titleBar then
+        titleBar.BackgroundColor3 = Color3.fromRGB(0, 150, 180)
+    end
+end)
+
+-- ============================================================
+--  自瞄标签页（主页）
+-- ============================================================
 local AimbotTab = Window:Tab({ Title = "自瞄", Icon = "solar:target-bold" })
+
+AimbotTab:Section({
+    Title = "作者：边牧 | 企鹅号：3475595188",
+    TextSize = 14,
+    TextTransparency = 0.2,
+})
+
+AimbotTab:Space()
 
 AimbotTab:Toggle({
     Title = "NPC自瞄",
@@ -1028,6 +1029,9 @@ AimbotTab:Slider({
     Callback = function(v) Settings.maxDist = v end,
 })
 
+-- ============================================================
+--  视觉标签页
+-- ============================================================
 local VisualTab = Window:Tab({ Title = "视觉", Icon = "solar:eye-bold" })
 
 VisualTab:Toggle({
@@ -1086,21 +1090,25 @@ VisualTab:Toggle({
 
 VisualTab:Space()
 VisualTab:Section({ Title = "物品透视", TextSize = 14 })
+
 VisualTab:Toggle({
-    Title = "🔦 物品透视（英文名称匹配）",
+    Title = "🔦 实时物品透视",
     Value = false,
     Callback = function(v)
         Settings.itemESP = v
         if v then
-            StartItemESP()
-            WindUI:Notify({ Title = "✅ 物品透视已开启", Content = "匹配英文名称", Duration = 3 })
+            startItemESP()
+            WindUI:Notify({ Title = "✅ 实时物品透视已开启", Content = "每0.1秒刷新", Duration = 3 })
         else
-            StopItemESP()
-            WindUI:Notify({ Title = "❌ 物品透视已关闭", Duration = 2 })
+            stopItemESP()
+            WindUI:Notify({ Title = "❌ 实时物品透视已关闭", Duration = 2 })
         end
     end,
 })
 
+-- ============================================================
+--  武器标签页
+-- ============================================================
 local WeaponTab = Window:Tab({ Title = "武器", Icon = "solar:gun-bold" })
 
 WeaponTab:Toggle({
@@ -1139,6 +1147,9 @@ WeaponTab:Slider({
     end,
 })
 
+-- ============================================================
+--  物品标签页
+-- ============================================================
 local ItemTab = Window:Tab({ Title = "物品", Icon = "solar:box-bold" })
 
 ItemTab:Button({
@@ -1170,7 +1181,7 @@ ItemTab:Button({
 })
 
 ItemTab:Button({
-    Title = "🎲 随机刷（一次性）",
+    Title = "🎲 随机刷（0~5000）",
     Callback = function()
         SpawnRandom()
     end,
@@ -1200,6 +1211,9 @@ ItemTab:Button({
     end,
 })
 
+-- ============================================================
+--  设置标签页
+-- ============================================================
 local SettingsTab = Window:Tab({ Title = "设置", Icon = "solar:settings-bold" })
 
 SettingsTab:Toggle({
@@ -1281,42 +1295,73 @@ SettingsTab:Space()
 SettingsTab:Section({ Title = "🔧 焊接功能", TextSize = 14 })
 
 SettingsTab:Button({
-    Title = "📌 必须先拖拽物品一次（捕获StopDrag ID）",
+    Title = "🔧 焊接（调试中）",
     Callback = function()
-        if capturedStopDragId then
-            WindUI:Notify({ Title = "✅ 已捕获ID", Content = "StopDrag: " .. capturedStopDragId, Duration = 3 })
-        else
-            WindUI:Notify({ Title = "⚠️ 请拖拽一个物品", Content = "触发StopDrag自动捕获", Duration = 3 })
-        end
+        WindUI:Notify({
+            Title = "⚠️ 功能调试中",
+            Content = "自由焊接功能，现在正在调试中，暂时使用不了，请见谅。",
+            Duration = 5,
+        })
     end,
 })
 
 SettingsTab:Toggle({
-    Title = "🔄 自动焊接（每3秒）",
+    Title = "🔄 自动焊接",
     Value = false,
     Callback = function(v)
         if v then
-            if not capturedStopDragId then
-                WindUI:Notify({ Title = "⚠️ 请先拖拽物品捕获ID", Duration = 3 })
-                return
-            end
-            WindUI:Notify({ Title = "🔄 自动焊接已开启", Duration = 2 })
-            task.spawn(function()
-                while v do
-                    if capturedStopDragId then
-                        ExecuteWeld(3109, capturedStopDragId)
-                    end
-                    task.wait(3)
-                end
-            end)
-        else
-            WindUI:Notify({ Title = "❌ 自动焊接已关闭", Duration = 2 })
+            WindUI:Notify({
+                Title = "⚠️ 功能调试中",
+                Content = "自由焊接功能，现在正在调试中，暂时使用不了，请见谅。",
+                Duration = 5,
+            })
+            task.wait(0.1)
         end
     end,
 })
 
-CreateWeldButton()
+-- ============================================================
+--  信息标签页（新增）
+-- ============================================================
+local InfoTab = Window:Tab({ Title = "信息", Icon = "solar:info-square-bold" })
 
+InfoTab:Section({
+    Title = "📋 脚本信息",
+    TextSize = 18,
+    FontWeight = Enum.FontWeight.Bold,
+})
+
+InfoTab:Space({ Columns = 2 })
+
+InfoTab:Section({
+    Title = "👤 作者：边牧",
+    TextSize = 16,
+    TextTransparency = 0.2,
+})
+
+InfoTab:Section({
+    Title = "🐧 企鹅号：3475595188",
+    TextSize = 16,
+    TextTransparency = 0.2,
+})
+
+InfoTab:Space({ Columns = 3 })
+
+InfoTab:Section({
+    Title = "⚠️ 此脚本为测试版",
+    TextSize = 16,
+    TextTransparency = 0.3,
+})
+
+InfoTab:Section({
+    Title = "不代表完整版，功能持续更新中",
+    TextSize = 14,
+    TextTransparency = 0.4,
+})
+
+-- ============================================================
+--  触摸控制
+-- ============================================================
 UserInputService.TouchStarted:Connect(function()
     touchCount = touchCount + 1
 end)
@@ -1325,12 +1370,15 @@ UserInputService.TouchEnded:Connect(function()
     if touchCount > 0 then touchCount = touchCount - 1 end
 end)
 
+-- ============================================================
+--  启动弹窗（显示10秒）
+-- ============================================================
 task.wait(1)
 WindUI:Notify({
     Title = "✅ DFN脚本已加载",
-    Content = "作者：边牧\n耗时一星期，累死我了",
+    Content = "做了我一个星期，累死我了\n作者：边牧 | 企鹅号：3475595188",
     Icon = "solar:check-circle-bold",
-    Duration = 6,
+    Duration = 10,
 })
 
 print("✅ DFN脚本已启动")
