@@ -68,10 +68,13 @@ local Settings = {
     healThreshold = 50,
     healSpeed = 2,
     itemESP = false,
+    randomSpawn = false,
 }
 
 local touchCount = 0
 local lastHealTime = 0
+local randomSpawnRunning = false
+local randomSpawnCoroutine = nil
 
 local NameTranslate = {
     ["Zombie"] = "僵尸",
@@ -503,14 +506,51 @@ local function SpawnRandom()
         WindUI:Notify({ Title = "❌ Store事件不存在", Duration = 3 })
         return
     end
+    local count = 0
     for id = 0, 5000 do
         pcall(function()
             storeEvent:FireServer(id)
             storeEvent:FireServer(id)
         end)
+        count = count + 1
         task.wait(0.01)
     end
-    WindUI:Notify({ Title = "✅ 随机刷完成", Content = "已刷 0~5000", Duration = 3 })
+    WindUI:Notify({ Title = "✅ 随机刷完成", Content = "已刷 " .. count .. " 件", Duration = 3 })
+end
+
+local function SpawnRandomLoop()
+    randomSpawnRunning = not randomSpawnRunning
+    if randomSpawnRunning then
+        if not storeEvent then
+            WindUI:Notify({ Title = "❌ Store事件不存在", Duration = 3 })
+            randomSpawnRunning = false
+            return
+        end
+        WindUI:Notify({ Title = "🔄 随机刷已开启", Content = "点击停止按钮关闭", Duration = 3 })
+        randomSpawnCoroutine = task.spawn(function()
+            local count = 0
+            while randomSpawnRunning do
+                for id = 0, 5000 do
+                    if not randomSpawnRunning then break end
+                    pcall(function()
+                        storeEvent:FireServer(id)
+                        storeEvent:FireServer(id)
+                    end)
+                    count = count + 1
+                    task.wait(0.01)
+                end
+                if randomSpawnRunning then
+                    WindUI:Notify({ Title = "📊 已刷 " .. count .. " 件", Duration = 2 })
+                end
+            end
+        end)
+    else
+        if randomSpawnCoroutine then
+            task.cancel(randomSpawnCoroutine)
+            randomSpawnCoroutine = nil
+        end
+        WindUI:Notify({ Title = "⏹ 随机刷已停止", Duration = 2 })
+    end
 end
 
 local selectedItem = nil
@@ -1130,9 +1170,16 @@ ItemTab:Button({
 })
 
 ItemTab:Button({
-    Title = "🎲 随机刷（0~5000）",
+    Title = "🎲 随机刷（一次性）",
     Callback = function()
         SpawnRandom()
+    end,
+})
+
+ItemTab:Button({
+    Title = "🔄 循环随机刷（切换）",
+    Callback = function()
+        SpawnRandomLoop()
     end,
 })
 
