@@ -35,6 +35,12 @@ pcall(function()
     end
 end)
 
+if not useEvent then
+    pcall(function()
+        useEvent = ReplicatedStorage:FindFirstChild("Use")
+    end)
+end
+
 local Settings = {
     aimbot = false,
     aimPart = "Head",
@@ -61,7 +67,6 @@ local Settings = {
     swingSpeed = 0.02,
     healThreshold = 50,
     healSpeed = 2,
-    -- 物品透视
     itemESP = false,
 }
 
@@ -428,185 +433,6 @@ RunService.RenderStepped:Connect(function()
     UpdateESP()
 end)
 
--- ============================================================
---  物品透视（基于ProximityPrompt，默认开启后直接显示）
--- ============================================================
-local itemHighlights = {}
-local itemESPEnabled = false
-local itemScanConnection = nil
-
-local targetKeywords = {
-    "Gold", "Silver", "Coal", "Bandage", "Snake Oil",
-    "Sack", "Shovel", "Pistol", "Rifle", "Shotgun",
-    "Bond", "Diamond", "Ammo", "Revolver", "Dynamite"
-}
-
-local function IsItem(obj)
-    if obj:IsA("Model") or obj:IsA("Tool") or obj:IsA("Part") then
-        for _, kw in ipairs(targetKeywords) do
-            if obj.Name:find(kw) then
-                return true
-            end
-        end
-        for _, child in ipairs(obj:GetDescendants()) do
-            if child:IsA("ProximityPrompt") then
-                local text = child.ObjectText or ""
-                for _, kw in ipairs(targetKeywords) do
-                    if text:find(kw) then
-                        return true
-                    end
-                end
-            end
-        end
-    end
-    return false
-end
-
-local function ScanItemESP()
-    if not itemESPEnabled then return end
-    
-    for _, h in ipairs(itemHighlights) do
-        pcall(function() h:Destroy() end)
-    end
-    itemHighlights = {}
-    
-    local count = 0
-    for _, obj in ipairs(Workspace:GetDescendants()) do
-        if IsItem(obj) then
-            if Players:GetPlayerFromCharacter(obj) then continue end
-            if obj:FindFirstChildOfClass("Humanoid") then continue end
-            
-            local hl = Instance.new("Highlight")
-            hl.Adornee = obj
-            hl.FillColor = Color3.fromRGB(255, 215, 0)
-            hl.FillTransparency = 0.3
-            hl.OutlineColor = Color3.fromRGB(255, 0, 0)
-            hl.OutlineTransparency = 0.2
-            hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-            hl.Parent = obj
-            table.insert(itemHighlights, hl)
-            count = count + 1
-        end
-    end
-    
-    if count > 0 then
-        print("🔦 物品透视: 已标记 " .. count .. " 件物品")
-    end
-end
-
-local function StartItemESP()
-    if itemScanConnection then
-        itemScanConnection:Disconnect()
-        itemScanConnection = nil
-    end
-    itemESPEnabled = true
-    ScanItemESP()
-    itemScanConnection = RunService.Heartbeat:Connect(function()
-        if itemESPEnabled then
-            ScanItemESP()
-        end
-    end)
-end
-
-local function StopItemESP()
-    itemESPEnabled = false
-    if itemScanConnection then
-        itemScanConnection:Disconnect()
-        itemScanConnection = nil
-    end
-    for _, h in ipairs(itemHighlights) do
-        pcall(function() h:Destroy() end)
-    end
-    itemHighlights = {}
-end
-
--- ============================================================
---  焊接功能
--- ============================================================
-local capturedStopDragId = nil
-
-if stopDragEvent then
-    local originalStopDrag = stopDragEvent.FireServer
-    stopDragEvent.FireServer = function(self, ...)
-        local args = {...}
-        if #args >= 1 then
-            local id = args[1]
-            if type(id) == "number" and id > 0 then
-                capturedStopDragId = id
-                print("🎯 StopDrag ID: " .. id)
-            end
-        end
-        return originalStopDrag(self, ...)
-    end
-end
-
-local function ExecuteWeld(id1, id2)
-    if not weldEvent then
-        WindUI:Notify({ Title = "❌ Weld不存在", Duration = 2 })
-        return false
-    end
-    if not id1 or not id2 then
-        WindUI:Notify({ Title = "⚠️ 参数不完整", Duration = 2 })
-        return false
-    end
-    pcall(function()
-        weldEvent:FireServer(id1, id2)
-        WindUI:Notify({ Title = "✅ 焊接成功", Content = id1 .. " → " .. id2, Duration = 2 })
-    end)
-    return true
-end
-
-local function CreateWeldButton()
-    local btnGui = Instance.new("ScreenGui")
-    btnGui.Name = "WeldButton"
-    btnGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
-    btnGui.ResetOnSpawn = false
-
-    local btn = Instance.new("TextButton")
-    btn.Size = UDim2.new(0, 70, 0, 70)
-    btn.Position = UDim2.new(0.85, -35, 0.1, 0)
-    btn.BackgroundColor3 = Color3.fromRGB(0, 150, 200)
-    btn.BackgroundTransparency = 0.5
-    btn.TextColor3 = Color3.fromRGB(255, 255, 255)
-    btn.Text = "🔧\n焊接"
-    btn.TextSize = 14
-    btn.Font = Enum.Font.SourceSansBold
-    btn.BorderSizePixel = 2
-    btn.BorderColor3 = Color3.fromRGB(255, 255, 255)
-    btn.Parent = btnGui
-    btn.ZIndex = 10
-    btn.Active = true
-    btn.Selectable = true
-
-    btn.MouseButton1Click:Connect(function()
-        if not capturedStopDragId then
-            WindUI:Notify({ Title = "⚠️ 请先拖拽物品", Content = "触发StopDrag自动捕获ID", Duration = 3 })
-            return
-        end
-        ExecuteWeld(3109, capturedStopDragId)
-    end)
-
-    local dragging = false
-    local startPos = nil
-    btn.InputBegan:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
-            dragging = true
-            startPos = input.Position
-        end
-    end)
-    btn.InputChanged:Connect(function(input)
-        if dragging and (input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseMovement) then
-            local size = workspace.CurrentCamera.ViewportSize
-            btn.Position = UDim2.new(math.clamp(input.Position.X / size.X, 0, 0.9), 0, math.clamp(input.Position.Y / size.Y, 0, 0.9), 0)
-        end
-    end)
-    btn.InputEnded:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
-            dragging = false
-        end
-    end)
-end
-
 local function FindItemId(name)
     for _, obj in ipairs(Workspace:GetDescendants()) do
         if obj:IsA("NumberValue") or obj:IsA("IntValue") then
@@ -625,133 +451,24 @@ local function FindItemId(name)
     return nil
 end
 
-local healRunning = false
-
-local function ToggleHeal()
-    healRunning = not healRunning
-    if healRunning then
-        WindUI:Notify({ Title = "✅ 自动治疗已开启", Content = "阈值: " .. Settings.healThreshold .. "%", Duration = 3 })
-    else
-        WindUI:Notify({ Title = "❌ 自动治疗已关闭", Duration = 2 })
-    end
-end
-
-RunService.Heartbeat:Connect(function()
-    if not healRunning or not useEvent then return end
-    local char = LocalPlayer.Character
-    if not char then return end
-    local hum = char:FindFirstChildOfClass("Humanoid")
-    if not hum then return end
-    local hp = hum.Health
-    local maxHp = hum.MaxHealth
-    if maxHp <= 0 then return end
-    if (hp / maxHp) * 100 < Settings.healThreshold and hp > 0 then
-        local now = os.clock()
-        if now - lastHealTime >= Settings.healSpeed then
-            local used = false
-            if Settings.useSnakeOil then
-                local id = FindItemId("Snake Oil") or FindItemId("蛇油")
-                if id then
-                    pcall(function()
-                        useEvent:FireServer(id)
-                        lastHealTime = now
-                        used = true
-                        print("💚 喝蛇油")
-                    end)
-                end
-            end
-            if not used and Settings.useBandage then
-                local id = FindItemId("Bandage") or FindItemId("绷带")
-                if id then
-                    pcall(function()
-                        useEvent:FireServer(id)
-                        lastHealTime = now
-                        used = true
-                        print("🩹 用绷带")
-                    end)
-                end
-            end
-        end
-    end
-end)
-
-local flyEnabled = false
-local flyBV = nil
-
-local function ToggleFly()
-    flyEnabled = not flyEnabled
-    local char = LocalPlayer.Character
-    if not char then return end
-    local hum = char:FindFirstChildOfClass("Humanoid")
-    if not hum then return end
-    if flyEnabled then
-        hum.PlatformStand = true
-        for _, state in ipairs(Enum.HumanoidStateType:GetEnumItems()) do
-            hum:SetStateEnabled(state, false)
-        end
-        hum:SetStateEnabled(Enum.HumanoidStateType.Climbing, true)
-        hum:SetStateEnabled(Enum.HumanoidStateType.Flying, true)
-        hum:SetStateEnabled(Enum.HumanoidStateType.RunningNoPhysics, true)
-        hum:SetStateEnabled(Enum.HumanoidStateType.StrafingNoPhysics, true)
-        hum:ChangeState(Enum.HumanoidStateType.Flying)
-        char.Animate.Disabled = true
-        flyBV = Instance.new("BodyVelocity")
-        flyBV.MaxForce = Vector3.new(1e9, 1e9, 1e9)
-        flyBV.Velocity = Vector3.new(0, 0, 0)
-        flyBV.Parent = char
-        WindUI:Notify({ Title = "✅ 飞行已开启", Content = "WASD移动，Space上升，Shift下降", Duration = 3 })
-        task.spawn(function()
-            while flyEnabled and char and char.Parent do
-                local hrp = char:FindFirstChild("HumanoidRootPart")
-                if not hrp then break end
-                local move = Vector3.new(0, 0, 0)
-                local speed = 50
-                if UserInputService:IsKeyDown(Enum.KeyCode.W) then move = move + Camera.CFrame.LookVector * speed end
-                if UserInputService:IsKeyDown(Enum.KeyCode.S) then move = move - Camera.CFrame.LookVector * speed end
-                if UserInputService:IsKeyDown(Enum.KeyCode.A) then move = move - Camera.CFrame.RightVector * speed end
-                if UserInputService:IsKeyDown(Enum.KeyCode.D) then move = move + Camera.CFrame.RightVector * speed end
-                if UserInputService:IsKeyDown(Enum.KeyCode.Space) then move = move + Vector3.new(0, speed, 0) end
-                if UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) then move = move - Vector3.new(0, speed, 0) end
-                flyBV.Velocity = move
-                task.wait()
-            end
-        end)
-    else
-        hum.PlatformStand = false
-        for _, state in ipairs(Enum.HumanoidStateType:GetEnumItems()) do
-            hum:SetStateEnabled(state, true)
-        end
-        char.Animate.Disabled = false
-        hum:ChangeState(Enum.HumanoidStateType.RunningNoPhysics)
-        if flyBV then flyBV:Destroy() flyBV = nil end
-        WindUI:Notify({ Title = "✅ 飞行已关闭", Duration = 2 })
-    end
-end
-
-local attackRunning = false
-local attackCoroutine = nil
-
-local function ToggleAttack()
-    attackRunning = not attackRunning
-    if attackRunning then
-        WindUI:Notify({ Title = "✅ 自动攻击已开启", Content = "攻速: " .. Settings.swingSpeed, Duration = 3 })
-        attackCoroutine = task.spawn(function()
-            while attackRunning do
-                for _, w in ipairs(weaponConfigs) do
-                    local obj = w.get()
-                    if obj and swingEvent then
-                        pcall(function()
-                            swingEvent:FireServer(obj, w.id, w.dir)
-                        end)
+local function ScanBackpack()
+    local items = {}
+    for _, tool in ipairs(LocalPlayer.Backpack:GetChildren()) do
+        if tool:IsA("Tool") then
+            local id = nil
+            for _, child in ipairs(tool:GetDescendants()) do
+                if child:IsA("NumberValue") or child:IsA("IntValue") then
+                    local val = child.Value
+                    if type(val) == "number" and val > 0 then
+                        id = val
+                        break
                     end
                 end
-                task.wait(Settings.swingSpeed)
             end
-        end)
-    else
-        if attackCoroutine then task.cancel(attackCoroutine) attackCoroutine = nil end
-        WindUI:Notify({ Title = "✅ 自动攻击已关闭", Duration = 2 })
+            table.insert(items, {name = tool.Name, id = id or "无ID"})
+        end
     end
+    return items
 end
 
 local function GetNameToIdMap()
@@ -873,25 +590,307 @@ local function SpawnByName()
     })
 end
 
-local function ScanBackpack()
-    local items = {}
-    for _, tool in ipairs(LocalPlayer.Backpack:GetChildren()) do
-        if tool:IsA("Tool") then
-            local id = nil
-            for _, child in ipairs(tool:GetDescendants()) do
-                if child:IsA("NumberValue") or child:IsA("IntValue") then
-                    local val = child.Value
-                    if type(val) == "number" and val > 0 then
-                        id = val
-                        break
+local itemHighlights = {}
+local itemESPEnabled = false
+local itemScanConnection = nil
+
+local targetKeywords = {
+    "Gold", "Silver", "Coal", "Bandage", "Snake Oil",
+    "Sack", "Shovel", "Pistol", "Rifle", "Shotgun",
+    "Bond", "Diamond", "Ammo", "Revolver", "Dynamite"
+}
+
+local function IsItem(obj)
+    if obj:IsA("Model") or obj:IsA("Tool") or obj:IsA("Part") then
+        for _, kw in ipairs(targetKeywords) do
+            if obj.Name:find(kw) then
+                return true
+            end
+        end
+        for _, child in ipairs(obj:GetDescendants()) do
+            if child:IsA("ProximityPrompt") then
+                local text = child.ObjectText or ""
+                for _, kw in ipairs(targetKeywords) do
+                    if text:find(kw) then
+                        return true
                     end
                 end
             end
-            table.insert(items, {name = tool.Name, id = id or "无ID"})
         end
     end
-    return items
+    return false
 end
+
+local function ScanItemESP()
+    if not itemESPEnabled then return end
+    for _, h in ipairs(itemHighlights) do
+        pcall(function() h:Destroy() end)
+    end
+    itemHighlights = {}
+    local count = 0
+    for _, obj in ipairs(Workspace:GetDescendants()) do
+        if IsItem(obj) then
+            if Players:GetPlayerFromCharacter(obj) then continue end
+            if obj:FindFirstChildOfClass("Humanoid") then continue end
+            local hl = Instance.new("Highlight")
+            hl.Adornee = obj
+            hl.FillColor = Color3.fromRGB(255, 215, 0)
+            hl.FillTransparency = 0.3
+            hl.OutlineColor = Color3.fromRGB(255, 0, 0)
+            hl.OutlineTransparency = 0.2
+            hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+            hl.Parent = obj
+            table.insert(itemHighlights, hl)
+            count = count + 1
+        end
+    end
+    if count > 0 then
+        print("🔦 物品透视: 已标记 " .. count .. " 件物品")
+    end
+end
+
+local function StartItemESP()
+    if itemScanConnection then
+        itemScanConnection:Disconnect()
+        itemScanConnection = nil
+    end
+    itemESPEnabled = true
+    ScanItemESP()
+    itemScanConnection = RunService.Heartbeat:Connect(function()
+        if itemESPEnabled then
+            ScanItemESP()
+        end
+    end)
+end
+
+local function StopItemESP()
+    itemESPEnabled = false
+    if itemScanConnection then
+        itemScanConnection:Disconnect()
+        itemScanConnection = nil
+    end
+    for _, h in ipairs(itemHighlights) do
+        pcall(function() h:Destroy() end)
+    end
+    itemHighlights = {}
+end
+
+local capturedStopDragId = nil
+
+if stopDragEvent then
+    local originalStopDrag = stopDragEvent.FireServer
+    stopDragEvent.FireServer = function(self, ...)
+        local args = {...}
+        if #args >= 1 then
+            local id = args[1]
+            if type(id) == "number" and id > 0 then
+                capturedStopDragId = id
+                print("🎯 StopDrag ID: " .. id)
+            end
+        end
+        return originalStopDrag(self, ...)
+    end
+end
+
+local function ExecuteWeld(id1, id2)
+    if not weldEvent then
+        WindUI:Notify({ Title = "❌ Weld不存在", Duration = 2 })
+        return false
+    end
+    if not id1 or not id2 then
+        WindUI:Notify({ Title = "⚠️ 参数不完整", Duration = 2 })
+        return false
+    end
+    pcall(function()
+        weldEvent:FireServer(id1, id2)
+        WindUI:Notify({ Title = "✅ 焊接成功", Content = id1 .. " → " .. id2, Duration = 2 })
+    end)
+    return true
+end
+
+local function CreateWeldButton()
+    local btnGui = Instance.new("ScreenGui")
+    btnGui.Name = "WeldButton"
+    btnGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
+    btnGui.ResetOnSpawn = false
+
+    local btn = Instance.new("TextButton")
+    btn.Size = UDim2.new(0, 70, 0, 70)
+    btn.Position = UDim2.new(0.85, -35, 0.1, 0)
+    btn.BackgroundColor3 = Color3.fromRGB(0, 150, 200)
+    btn.BackgroundTransparency = 0.5
+    btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    btn.Text = "🔧\n焊接"
+    btn.TextSize = 14
+    btn.Font = Enum.Font.SourceSansBold
+    btn.BorderSizePixel = 2
+    btn.BorderColor3 = Color3.fromRGB(255, 255, 255)
+    btn.Parent = btnGui
+    btn.ZIndex = 10
+    btn.Active = true
+    btn.Selectable = true
+
+    btn.MouseButton1Click:Connect(function()
+        if not capturedStopDragId then
+            WindUI:Notify({ Title = "⚠️ 请先拖拽物品", Content = "触发StopDrag自动捕获ID", Duration = 3 })
+            return
+        end
+        ExecuteWeld(3109, capturedStopDragId)
+    end)
+
+    local dragging = false
+    local startPos = nil
+    btn.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
+            dragging = true
+            startPos = input.Position
+        end
+    end)
+    btn.InputChanged:Connect(function(input)
+        if dragging and (input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseMovement) then
+            local size = workspace.CurrentCamera.ViewportSize
+            btn.Position = UDim2.new(math.clamp(input.Position.X / size.X, 0, 0.9), 0, math.clamp(input.Position.Y / size.Y, 0, 0.9), 0)
+        end
+    end)
+    btn.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
+            dragging = false
+        end
+    end)
+end
+
+local flyEnabled = false
+local flyBV = nil
+
+local function ToggleFly()
+    flyEnabled = not flyEnabled
+    local char = LocalPlayer.Character
+    if not char then return end
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    if not hum then return end
+    if flyEnabled then
+        hum.PlatformStand = true
+        for _, state in ipairs(Enum.HumanoidStateType:GetEnumItems()) do
+            hum:SetStateEnabled(state, false)
+        end
+        hum:SetStateEnabled(Enum.HumanoidStateType.Climbing, true)
+        hum:SetStateEnabled(Enum.HumanoidStateType.Flying, true)
+        hum:SetStateEnabled(Enum.HumanoidStateType.RunningNoPhysics, true)
+        hum:SetStateEnabled(Enum.HumanoidStateType.StrafingNoPhysics, true)
+        hum:ChangeState(Enum.HumanoidStateType.Flying)
+        char.Animate.Disabled = true
+        flyBV = Instance.new("BodyVelocity")
+        flyBV.MaxForce = Vector3.new(1e9, 1e9, 1e9)
+        flyBV.Velocity = Vector3.new(0, 0, 0)
+        flyBV.Parent = char
+        WindUI:Notify({ Title = "✅ 飞行已开启", Content = "WASD移动，Space上升，Shift下降", Duration = 3 })
+        task.spawn(function()
+            while flyEnabled and char and char.Parent do
+                local hrp = char:FindFirstChild("HumanoidRootPart")
+                if not hrp then break end
+                local move = Vector3.new(0, 0, 0)
+                local speed = 50
+                if UserInputService:IsKeyDown(Enum.KeyCode.W) then move = move + Camera.CFrame.LookVector * speed end
+                if UserInputService:IsKeyDown(Enum.KeyCode.S) then move = move - Camera.CFrame.LookVector * speed end
+                if UserInputService:IsKeyDown(Enum.KeyCode.A) then move = move - Camera.CFrame.RightVector * speed end
+                if UserInputService:IsKeyDown(Enum.KeyCode.D) then move = move + Camera.CFrame.RightVector * speed end
+                if UserInputService:IsKeyDown(Enum.KeyCode.Space) then move = move + Vector3.new(0, speed, 0) end
+                if UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) then move = move - Vector3.new(0, speed, 0) end
+                flyBV.Velocity = move
+                task.wait()
+            end
+        end)
+    else
+        hum.PlatformStand = false
+        for _, state in ipairs(Enum.HumanoidStateType:GetEnumItems()) do
+            hum:SetStateEnabled(state, true)
+        end
+        char.Animate.Disabled = false
+        hum:ChangeState(Enum.HumanoidStateType.RunningNoPhysics)
+        if flyBV then flyBV:Destroy() flyBV = nil end
+        WindUI:Notify({ Title = "✅ 飞行已关闭", Duration = 2 })
+    end
+end
+
+local attackRunning = false
+local attackCoroutine = nil
+
+local function ToggleAttack()
+    attackRunning = not attackRunning
+    if attackRunning then
+        WindUI:Notify({ Title = "✅ 自动攻击已开启", Content = "攻速: " .. Settings.swingSpeed, Duration = 3 })
+        attackCoroutine = task.spawn(function()
+            while attackRunning do
+                for _, w in ipairs(weaponConfigs) do
+                    local obj = w.get()
+                    if obj and swingEvent then
+                        pcall(function()
+                            swingEvent:FireServer(obj, w.id, w.dir)
+                        end)
+                    end
+                end
+                task.wait(Settings.swingSpeed)
+            end
+        end)
+    else
+        if attackCoroutine then task.cancel(attackCoroutine) attackCoroutine = nil end
+        WindUI:Notify({ Title = "✅ 自动攻击已关闭", Duration = 2 })
+    end
+end
+
+local healRunning = false
+
+local function ToggleHeal()
+    healRunning = not healRunning
+    if healRunning then
+        WindUI:Notify({
+            Title = "✅ 自动治疗已开启",
+            Content = "阈值: " .. Settings.healThreshold .. "%",
+            Duration = 3,
+        })
+    else
+        WindUI:Notify({ Title = "✅ 自动治疗已关闭", Duration = 2 })
+    end
+end
+
+RunService.Heartbeat:Connect(function()
+    if not healRunning or not useEvent then return end
+    local char = LocalPlayer.Character
+    if not char then return end
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    if not hum then return end
+    local hp = hum.Health
+    local maxHp = hum.MaxHealth
+    if maxHp <= 0 then return end
+    if (hp / maxHp) * 100 < Settings.healThreshold and hp > 0 then
+        local now = os.clock()
+        if now - lastHealTime >= Settings.healSpeed then
+            local used = false
+            if Settings.useSnakeOil then
+                local id = FindItemId("Snake Oil") or FindItemId("蛇油")
+                if id then
+                    pcall(function()
+                        useEvent:FireServer(id)
+                        lastHealTime = now
+                        used = true
+                        print("💚 喝蛇油")
+                    end)
+                end
+            end
+            if not used and Settings.useBandage then
+                local id = FindItemId("Bandage") or FindItemId("绷带")
+                if id then
+                    pcall(function()
+                        useEvent:FireServer(id)
+                        lastHealTime = now
+                        used = true
+                        print("🩹 用绷带")
+                    end)
+                end
+            end
+        end
+    end
+end)
 
 local Window = WindUI:CreateWindow({
     Title = "DFN脚本",
@@ -1269,14 +1268,8 @@ SettingsTab:Toggle({
     end,
 })
 
--- ============================================================
---  圆形焊接按钮
--- ============================================================
 CreateWeldButton()
 
--- ============================================================
---  触摸控制
--- ============================================================
 UserInputService.TouchStarted:Connect(function()
     touchCount = touchCount + 1
 end)
@@ -1285,9 +1278,6 @@ UserInputService.TouchEnded:Connect(function()
     if touchCount > 0 then touchCount = touchCount - 1 end
 end)
 
--- ============================================================
---  启动弹窗
--- ============================================================
 task.wait(1)
 WindUI:Notify({
     Title = "✅ DFN脚本已加载",
